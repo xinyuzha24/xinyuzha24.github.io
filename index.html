@@ -1,0 +1,2684 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>无人船自主航行与靠离泊算法 · 仿真测试台</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1822; --panel:#16222e; --panel2:#1d2d3c; --line:#273a4c;
+    --txt:#e6eef5; --muted:#8aa0b3; --accent:#2dd4bf; --accent2:#38bdf8;
+    --warn:#f59e0b; --danger:#ef4444; --ok:#22c55e;
+    /* 派生表面/控件色（供主题切换）*/
+    --input-bg:#0d161f; --item-bg:#0e1925; --scroll:#2a3f52;
+    --btn-sec:#26384a; --seg-bg:#16242f; --badge-bg:#0d2030; --badge-line:#1c3a4f;
+    --overlay:rgba(15,24,34,.92); --faint:#5d7183; --btn-txt:#06131c;
+    --map-style:'amap://styles/darkblue';
+  }
+  body.light{
+    --bg:#eef2f6; --panel:#ffffff; --panel2:#f4f7fa; --line:#d5dde5;
+    --txt:#1a2733; --muted:#5b6b7a; --accent:#0d9488; --accent2:#0284c7;
+    --warn:#b45309; --danger:#dc2626; --ok:#15803d;
+    --input-bg:#ffffff; --item-bg:#f4f7fa; --scroll:#c3ccd6;
+    --btn-sec:#d7e0ea; --seg-bg:#e3eaf1; --badge-bg:#e0edf7; --badge-line:#a9c9e0;
+    --overlay:rgba(255,255,255,.92); --faint:#8595a4; --btn-txt:#ffffff;
+    --map-style:'amap://styles/normal';
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;font-family:"Segoe UI",-apple-system,"Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--txt);overflow:hidden}
+  body{display:flex;flex-direction:column}
+  /* ---- 顶栏（整幅标题，居中）---- */
+  #topbar{flex:none;position:relative;display:flex;align-items:center;justify-content:center;gap:12px;
+    height:52px;padding:0 18px;background:var(--panel);border-bottom:1px solid var(--line)}
+  #topbar .tb-title{font-size:17px;font-weight:700;letter-spacing:.4px;white-space:nowrap}
+  #topbar .tb-sub{font-size:11px;color:var(--muted);white-space:nowrap}
+  #topbar #settingsBtn{position:absolute;right:18px;top:50%;transform:translateY(-50%);flex:none}
+  #app{display:flex;flex:1;min-height:0;width:100vw}
+  #map{flex:1;height:100%;position:relative}
+  /* ---- side panel（右侧：图标竖条 rail 常驻；内容区浮层覆盖在地图上，不挤压左侧）---- */
+  #side{flex:none;height:100%;position:relative;z-index:30}
+  /* 右侧竖直图标条（始终显示，仅图标、不显示文字）*/
+  #sideRail{width:56px;height:100%;background:var(--panel2);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;padding:10px 0;gap:6px}
+  #sideRail .tab{position:relative;display:flex;align-items:center;justify-content:center;
+    margin:0 8px;height:40px;cursor:pointer;user-select:none;border-radius:9px;
+    transition:.15s;font-size:20px;line-height:1;color:#fff}
+  #sideRail .tab .ic{line-height:1}
+  #sideRail .tab .lbl{display:none}   /* 收起时不显示文字 */
+  #sideRail .tab:hover{filter:brightness(1.12)}
+  /* 铅笔改为「右上→左下」方向（水平镜像使笔尖指向左下、笔杆朝右上）*/
+  #sideRail .tab[data-tab="edit"] .ic{display:inline-block;transform:scaleX(-1)}
+  /* 场景运行图标略小一些 */
+  #sideRail .tab[data-tab="run"] .ic{font-size:15px}
+  /* 场景复现循环箭头加粗一些 */
+  #sideRail .tab[data-tab="replay"] .ic{font-weight:900;font-size:22px}
+  /* 四个功能各自配色（收起时用浅色底块区分）*/
+  #sideRail .tab[data-tab="edit"]  {background:rgba(245,158,11,.16);color:#f59e0b}
+  #sideRail .tab[data-tab="run"]   {background:rgba(45,212,191,.16);color:#2dd4bf}
+  #sideRail .tab[data-tab="replay"]{background:rgba(56,189,248,.16);color:#38bdf8}
+  #sideRail .tab[data-tab="record"]{background:rgba(239,68,68,.16);color:#ef4444}
+  /* 激活态：实心底、白字 */
+  #sideRail .tab.on[data-tab="edit"]  {background:#f59e0b;color:#06131c}
+  #sideRail .tab.on[data-tab="run"]   {background:#2dd4bf;color:#06131c}
+  #sideRail .tab.on[data-tab="replay"]{background:#38bdf8;color:#06131c}
+  #sideRail .tab.on[data-tab="record"]{background:#ef4444;color:#fff}
+  /* 可折叠内容区：绝对定位浮在地图之上，从 rail 左侧展开（不挤压地图/左栏）*/
+  #sideContent{position:absolute;top:0;right:56px;width:360px;height:100%;
+    background:var(--panel);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;box-shadow:-8px 0 24px rgba(0,0,0,.28)}
+  #side.collapsed #sideContent{display:none}
+  /* ---- left panel (船体状态) ---- */
+  #sideLeft{width:340px;min-width:340px;height:100%;background:var(--panel);
+    border-right:1px solid var(--line);display:flex;flex-direction:column}
+  #sideContent header,#sideLeft header{padding:12px 14px;border-bottom:1px solid var(--line)}
+  #sideContent header h1,#sideLeft header h1{font-size:15px;margin:0;letter-spacing:.3px}
+  #sideContent header p,#sideLeft header p{margin:4px 0 0;font-size:11px;color:var(--muted)}
+  /* 内容区标题条：显示当前功能名 + 收起按钮 */
+  #sideContentHead{flex:none;display:flex;align-items:center;gap:8px;padding:11px 14px;
+    border-bottom:1px solid var(--line)}
+  #sideContentHead h1{flex:1;font-size:15px;margin:0;letter-spacing:.3px}
+  #sideContentHead .collapseBtn{flex:none;padding:4px 9px}
+  .tabpane{display:none}
+  .tabpane.on{display:block}
+  .soon{font-size:11px;color:var(--faint);text-align:center;padding:14px 8px;line-height:1.6;
+    border:1px dashed var(--line);border-radius:8px;margin-top:8px}
+  /* ---- 归属标签（层徽标）---- */
+  .lbadge{display:inline-block;font-size:9px;padding:0 5px;border-radius:8px;line-height:15px;
+    font-weight:600;margin-left:6px;vertical-align:middle;border:1px solid transparent}
+  /* 静障碍类标签用橙、动目标类标签用蓝，与地图上对象颜色一致 */
+  .lbadge.shared,.lbadge.sceneobs{color:var(--warn);border-color:#5a4212;background:rgba(245,158,11,.12)}
+  .lbadge.scene,.lbadge.realtime{color:var(--accent2);border-color:var(--badge-line);background:var(--badge-bg)}
+  /* ---- 场景/库 归属分段 ---- */
+  .ownerbar{display:flex;align-items:center;gap:8px;margin:6px 0 2px}
+  .ownerbar .ol{font-size:11px;color:var(--muted);flex:none}
+  /* ---- 场景编辑 子选项分段（共用静障碍/场景/实时动目标）---- */
+  #editSubTabs{display:flex;gap:6px;margin-bottom:10px}
+  #editSubTabs .stab{flex:1;text-align:center;padding:7px 4px;cursor:pointer;user-select:none;
+    font-size:11px;font-weight:600;color:var(--muted);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;transition:.15s}
+  #editSubTabs .stab:hover{color:var(--txt)}
+  #editSubTabs .stab.on{color:var(--btn-txt);background:var(--accent2);border-color:var(--accent2)}
+  .subpane{display:none}
+  .subpane.on{display:block}
+  .iconbtn{flex:none;width:34px;padding:6px 0;font-size:16px;line-height:1}
+  .disabledpane{opacity:.5;pointer-events:none}
+  /* ---- 场景列表（每个场景占满整行 + 底部虚线新建）---- */
+  #sceneGrid{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+  .scene-card{position:relative;border:1px solid var(--line);border-radius:9px;background:var(--panel2);
+    padding:10px 11px;cursor:pointer;transition:.15s;display:flex;align-items:center;gap:10px}
+  .scene-card:hover{border-color:var(--accent2)}
+  .scene-card .sc-info{flex:1;min-width:0}
+  .scene-card .sc-name{font-size:13px;font-weight:600;color:var(--txt);white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .scene-card .sc-meta{font-size:10px;color:var(--muted);margin-top:2px}
+  .scene-card .sc-ops{display:flex;gap:8px;flex:none}
+  .scene-card.active{border-color:var(--accent2);box-shadow:0 0 0 1px var(--accent2) inset}
+  .scene-card .sc-selflag{font-size:9px;color:var(--accent2);border:1px solid var(--badge-line);
+    background:var(--badge-bg);border-radius:8px;padding:0 5px;margin-left:6px;font-weight:600}
+  .scene-add{border:1.5px dashed var(--line);border-radius:9px;background:transparent;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    padding:12px 0;color:var(--muted);transition:.15s}
+  .scene-add:hover{border-color:var(--accent2);color:var(--accent2)}
+  .scene-add .plus{font-size:20px;line-height:1}
+  .scene-add .txt{font-size:12px}
+  /* 场景内部编辑视图头部 */
+  .scene-editor-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .scene-editor-head .back{flex:none;padding:4px 9px}
+  .scene-editor-head .nm{flex:1;font-size:13px;font-weight:600;color:var(--txt);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sceneview{display:none}
+  .sceneview.on{display:block}
+  .scroll{flex:1;overflow-y:auto;padding:10px 12px}
+  .scroll::-webkit-scrollbar{width:8px}
+  .scroll::-webkit-scrollbar-thumb{background:var(--scroll);border-radius:4px}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    margin-bottom:10px;overflow:hidden}
+  .card>.head{display:flex;align-items:center;gap:8px;padding:9px 11px;cursor:pointer;
+    user-select:none;font-size:13px;font-weight:600}
+  .card>.head .dot{width:8px;height:8px;border-radius:50%}
+  .card>.body{padding:4px 11px 11px}
+  .card>.body.collapsed{display:none}
+  label.fld{display:block;font-size:11px;color:var(--muted);margin:8px 0 3px}
+  input,select,textarea{width:100%;background:var(--input-bg);border:1px solid var(--line);
+    color:var(--txt);border-radius:6px;padding:6px 8px;font-size:12px;font-family:inherit}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent2)}
+  .row{display:flex;gap:8px}
+  .row>*{flex:1}
+  button{cursor:pointer;border:none;border-radius:6px;padding:7px 10px;font-size:12px;
+    font-weight:600;color:var(--btn-txt);background:var(--accent);transition:.15s;font-family:inherit}
+  button:hover{filter:brightness(1.1)}
+  button:focus{outline:none}
+  button:focus-visible{outline:2px solid var(--accent2);outline-offset:1px}
+  button.sec{background:var(--btn-sec);color:var(--txt)}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  button.danger{background:var(--danger);color:#fff}
+  button.warn{background:var(--warn);color:#1a1206}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .btnrow{display:flex;gap:6px;flex-wrap:wrap}
+  .btnrow>button{flex:1;white-space:nowrap}
+  .list{margin-top:8px}
+  .item{display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--line);
+    border-radius:6px;margin-bottom:6px;background:var(--item-bg);font-size:12px}
+  .item .meta{flex:1;min-width:0}
+  .item .meta .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .item .meta .s{font-size:10px;color:var(--muted);margin-top:2px}
+  .item .mini,.mini{padding:3px 6px;font-size:11px}
+  .swatch{width:10px;height:10px;border-radius:3px;flex:none}
+  .hint{font-size:11px;color:var(--muted);line-height:1.5;margin:6px 0 0}
+  .empty{font-size:11px;color:var(--faint);text-align:center;padding:10px 0}
+  .badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:10px;
+    background:var(--badge-bg);color:var(--accent2);border:1px solid var(--badge-line)}
+  /* drawing banner over map */
+  #banner{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:50;
+    background:var(--overlay);border:1px solid var(--accent);border-radius:8px;
+    padding:9px 14px;font-size:13px;display:none;align-items:center;gap:12px;color:var(--txt);
+    box-shadow:0 6px 24px rgba(0,0,0,.4)}
+  #banner.show{display:flex}
+  #banner b{color:var(--accent)}
+  #banner button{padding:5px 10px;font-size:12px}
+  /* clock */
+  #clock{position:absolute;left:14px;bottom:14px;z-index:40;background:var(--overlay);
+    border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:12px;min-width:230px;color:var(--txt)}
+  #clock .big{font-size:15px;font-weight:700;color:var(--accent)}
+  #clock .lbl{color:var(--muted);font-size:10px}
+  .kv{display:flex;justify-content:space-between;font-size:11px;margin-top:3px}
+  .kv span:first-child{color:var(--muted)}
+  .seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-top:6px}
+  .seg button{flex:1;border-radius:0;background:var(--seg-bg);color:var(--muted);font-weight:500}
+  .seg button.on{background:var(--accent2);color:var(--btn-txt)}
+  #keytip{position:absolute;right:14px;bottom:40px;z-index:40;font-size:10px;color:var(--faint);
+    background:var(--overlay);padding:4px 8px;border-radius:6px}
+  .apiwarn{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    background:var(--bg);z-index:100;text-align:center;padding:30px;color:var(--txt)}
+  .apiwarn.show{display:flex}
+  .apiwarn div{max-width:520px}
+  .apiwarn code{background:var(--panel2);padding:2px 6px;border-radius:4px;color:var(--accent)}
+  /* ---- 登录浮层（选择本船编号）---- */
+  #loginGate{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
+    background:var(--bg)}
+  #loginGate.hide{display:none}
+  #loginGate .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:26px 30px;min-width:300px;box-shadow:0 10px 40px rgba(0,0,0,.4);text-align:center}
+  #loginGate h2{margin:0 0 4px;font-size:18px;color:var(--txt)}
+  #loginGate p{margin:0 0 16px;font-size:12px;color:var(--muted)}
+  #loginGate label{display:block;font-size:11px;color:var(--muted);text-align:left;margin-bottom:4px}
+  #loginGate select{margin-bottom:14px}
+  #loginGate button{width:100%;padding:9px}
+  /* ---- 实时只读面板 ---- */
+  .mqtt-bar{display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:8px}
+  .mqtt-bar .st-dot{width:9px;height:9px;border-radius:50%;background:#5d7183;flex:none;
+    box-shadow:0 0 0 3px rgba(93,113,131,.18)}
+  .mqtt-bar.connected .st-dot{background:var(--ok);box-shadow:0 0 0 3px rgba(34,197,94,.2)}
+  .mqtt-bar.nodata .st-dot{background:var(--warn);box-shadow:0 0 0 3px rgba(245,158,11,.2)}
+  .mqtt-bar.reconnecting .st-dot{background:var(--warn);box-shadow:0 0 0 3px rgba(245,158,11,.2)}
+  .mqtt-bar.closed .st-dot,.mqtt-bar.offline .st-dot{background:var(--danger);box-shadow:0 0 0 3px rgba(239,68,68,.2)}
+  .mqtt-bar .st-txt{font-weight:600}
+  .mqtt-bar .st-delay{font-size:10px;padding:0 5px;border-radius:8px;font-family:Consolas,monospace;
+    background:var(--badge-bg);color:var(--muted);border:1px solid var(--badge-line)}
+  .mqtt-bar .st-delay.okv{color:#22c55e;border-color:#1e4d33}
+  .mqtt-bar .st-delay.warnv{color:#f59e0b;border-color:#5a4212}
+  .mqtt-bar .st-delay.badv{color:#ef4444;border-color:#5a1e1e}
+  .mqtt-bar .st-delay:empty{display:none}
+  .mqtt-bar .st-sub{color:var(--muted);font-size:10px;margin-left:auto;white-space:nowrap}
+  .grp{margin-top:6px}
+  .grp>.gt{font-size:11px;color:var(--accent2);font-weight:600;margin:8px 0 4px;
+    text-transform:uppercase;letter-spacing:.4px}
+  .rt{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:11.5px}
+  .rt .k{color:var(--muted);white-space:nowrap}
+  .rt .v{color:var(--txt);font-family:"SFMono-Regular",Consolas,monospace;text-align:right;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rt .v.warnv{color:var(--warn)} .rt .v.okv{color:var(--ok)} .rt .v.badv{color:var(--danger)}
+  /* ---- 设置浮层（右上角齿轮）---- */
+  #settingsBtn{flex:none;padding:5px 9px;font-size:15px;line-height:1}
+  #settingsModal{position:fixed;inset:0;z-index:210;display:flex;align-items:center;justify-content:center;
+    background:rgba(0,0,0,.45)}
+  #settingsModal.hide{display:none}
+  #settingsModal .settings-box{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    width:420px;max-width:calc(100vw - 40px);max-height:calc(100vh - 60px);display:flex;flex-direction:column;
+    box-shadow:0 12px 48px rgba(0,0,0,.5)}
+  .settings-head{display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid var(--line)}
+  .settings-head h2{flex:1;margin:0;font-size:16px;color:var(--txt)}
+  .settings-head button{flex:none;padding:4px 10px}
+  .settings-body{padding:4px 16px 16px;overflow-y:auto}
+  .settings-body::-webkit-scrollbar{width:8px}
+  .settings-body::-webkit-scrollbar-thumb{background:var(--scroll);border-radius:4px}
+  .settings-sec{padding:12px 0;border-bottom:1px solid var(--line)}
+  .settings-sec:last-child{border-bottom:none}
+  .settings-sec-title{font-size:12px;font-weight:700;color:var(--accent2);text-transform:uppercase;
+    letter-spacing:.5px;margin-bottom:6px}
+  .settings-row{display:flex;align-items:center;gap:10px;margin:8px 0}
+  .settings-row .settings-label{flex:1;font-size:12px;color:var(--txt)}
+  .settings-row button{flex:none;width:auto}
+</style>
+</head>
+<body>
+<!-- 登录浮层：选择本船编号（ship_num）后才连 MQTT -->
+<div id="loginGate">
+  <div class="box">
+    <h2>无人船仿真测试平台</h2>
+    <p>请选择本船编号登录（多船请用不同浏览器标签分别登录）</p>
+    <label>本船编号 ship_num</label>
+    <select id="loginShipSel"></select>
+    <button id="loginBtn">登录</button>
+  </div>
+</div>
+<!-- 设置浮层：显示设置 / 运行配置 / 登录选项 -->
+<div id="settingsModal" class="hide">
+  <div class="settings-box">
+    <div class="settings-head">
+      <h2>⚙ 设置</h2>
+      <button class="ghost" id="settingsCloseBtn">关闭</button>
+    </div>
+    <div class="settings-body">
+
+      <!-- 1) 显示设置 -->
+      <div class="settings-sec">
+        <div class="settings-sec-title">显示设置</div>
+        <div class="settings-row">
+          <span class="settings-label">主题外观</span>
+          <button class="sec" id="themeBtn">🌙 深色</button>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">历史任务与轨迹</span>
+          <button class="ghost" id="clearTrackBtn">清除任务与轨迹</button>
+        </div>
+      </div>
+
+      <!-- 2) 运行配置 -->
+      <div class="settings-sec">
+        <div class="settings-sec-title">运行配置</div>
+        <label class="fld" style="margin-top:0">动目标下发频率 (Hz)</label>
+        <div class="row" style="align-items:stretch">
+          <input id="tgtRateInput" type="number" min="0.1" step="0.1" value="10">
+          <button class="sec" id="applyTgtRateBtn" style="flex:none;width:56px">应用</button>
+        </div>
+        <label class="fld">静障碍下发频率 (Hz)</label>
+        <div class="row" style="align-items:stretch">
+          <input id="obsRateInput" type="number" min="0.01" step="0.01" value="0.1">
+          <button class="sec" id="applyObsRateBtn" style="flex:none;width:56px">应用</button>
+        </div>
+        <div class="settings-row" style="margin-top:12px">
+          <span class="settings-label">距离圆环</span>
+          <button class="ghost" id="toggleRingsBtn">距离圆环：开</button>
+        </div>
+        <label class="fld">距离圆环半径 (m，逗号分隔，可增减圈数)</label>
+        <div class="row" style="align-items:stretch">
+          <input id="ringRadii" type="text" value="500,1000,2000">
+          <button class="sec" id="applyRingsBtn" style="flex:none;width:56px">应用</button>
+        </div>
+      </div>
+
+      <!-- 3) 登录选项 -->
+      <div class="settings-sec">
+        <div class="settings-sec-title">登录选项</div>
+        <div class="settings-row">
+          <span class="settings-label" id="currentShipLabel">当前本船 #—</span>
+          <button class="danger" id="logoutBtn">退出登录</button>
+        </div>
+        <p class="hint" style="margin-top:2px">退出后可重新登录到不同船只（将断开当前 MQTT 连接）。</p>
+      </div>
+
+    </div>
+  </div>
+</div>
+<!-- 顶栏：整幅标题（居中） -->
+<div id="topbar">
+  <span class="tb-title">无人船仿真测试平台</span>
+  <span class="badge">GCJ-02</span>
+  <button class="ghost" id="settingsBtn" title="设置">⚙ 设置</button>
+</div>
+<div id="app">
+  <div id="sideLeft">
+    <header style="display:flex;align-items:center;gap:8px">
+      <h1 style="flex:1">船体状态 <span class="badge">实时</span></h1>
+    </header>
+    <div class="scroll">
+
+      <!-- ============ SHIP STATE (船端实时下发, 只读) ============ -->
+      <div class="card" data-card="ship">
+        <div class="head"><span class="dot" style="background:var(--accent)"></span>自船状态<span style="flex:1"></span><span id="shipRxBadge" class="badge">—</span></div>
+        <div class="body">
+          <div class="mqtt-bar offline" id="mqttBar">
+            <span class="st-dot"></span>
+            <span class="st-txt" id="mqttStatusTxt">未连接</span>
+            <span class="st-delay" id="mqttDelay"></span>
+          </div>
+
+          <!-- 定位 loca/odometry -->
+          <div class="grp">
+            <div class="gt">定位</div>
+            <div class="rt">
+              <div class="k">经度 lng (°)</div><div class="v" id="lo_lng">—</div>
+              <div class="k">纬度 lat (°)</div><div class="v" id="lo_lat">—</div>
+              <div class="k">高程 alt (m)</div><div class="v" id="lo_alt">—</div>
+            </div>
+          </div>
+
+          <!-- 航速 -->
+          <div class="grp">
+            <div class="gt">航速</div>
+            <div class="rt">
+              <div class="k">线速度 v (x,y,z)</div><div class="v" id="lo_vel">—</div>
+              <div class="k">加速度 a (x,y,z)</div><div class="v" id="lo_acc">—</div>
+              <div class="k">角速度 ω (x,y,z)</div><div class="v" id="lo_gyr">—</div>
+            </div>
+          </div>
+
+          <!-- 姿态 -->
+          <div class="grp">
+            <div class="gt">姿态</div>
+            <div class="rt">
+              <div class="k">横滚角 roll (°)</div><div class="v" id="lo_roll">—</div>
+              <div class="k">俯仰角 pitch (°)</div><div class="v" id="lo_pitch">—</div>
+              <div class="k">航向角 yaw (°)</div><div class="v" id="lo_yaw">—</div>
+            </div>
+          </div>
+
+          <!-- 任务 main/task -->
+          <div class="grp">
+            <div class="gt">任务</div>
+            <div class="rt">
+              <div class="k">任务类型</div><div class="v" id="ms_type">—</div>
+              <div class="k">任务状态</div><div class="v" id="ms_status">—</div>
+              <div class="k">任务进度</div><div class="v" id="ms_progress">—</div>
+            </div>
+          </div>
+
+          <div class="btnrow" style="margin-top:10px">
+            <button class="ghost" id="focusShipBtn">定位到本船</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+  <div id="map">
+    <div id="banner">
+      <span id="bannerTxt"></span>
+      <button id="bannerFinish" class="warn">结束绘制</button>
+      <button id="bannerCancel" class="ghost" style="color:#fff">取消</button>
+    </div>
+    <div id="clock">
+      <div class="lbl">SIM TIME (UTC)</div>
+      <div class="big" id="clkTime">--:--:--</div>
+      <div class="kv"><span>时间戳</span><span id="clkTs">—</span></div>
+    </div>
+    <div class="apiwarn" id="apiwarn"><div>
+      <h2>未配置高德地图 Key</h2>
+      <p>请在本文件顶部 <code>AMAP_CONFIG</code> 中填入你的 Web端(JS API) Key 与安全密钥后刷新。</p>
+      <p style="color:var(--muted);font-size:12px">高德开放平台 → 控制台 → 应用管理 → 创建应用 → 添加「Web端(JS API)」Key</p>
+    </div></div>
+  </div>
+
+  <div id="side" class="collapsed">
+    <!-- 右侧图标竖条（始终显示，仅图标）：点开展开对应功能面板，再点收起 -->
+    <div id="sideRail">
+      <div class="tab" data-tab="edit"   title="场景编辑"><span class="ic">✎</span><span class="lbl">场景编辑</span></div>
+      <div class="tab" data-tab="run"    title="场景运行"><span class="ic">▶</span><span class="lbl">场景运行</span></div>
+      <div class="tab" data-tab="replay" title="场景复现"><span class="ic">↻</span><span class="lbl">场景复现</span></div>
+      <div class="tab" data-tab="record" title="录制回放"><span class="ic">●</span><span class="lbl">录制回放</span></div>
+    </div>
+    <!-- 可折叠内容区 -->
+    <div id="sideContent">
+      <div id="sideContentHead">
+        <h1 id="sideContentTitle">场景编辑</h1>
+        <button class="ghost collapseBtn" id="sideCollapseBtn" title="收起">✕</button>
+      </div>
+      <div class="scroll">
+
+      <!-- ============ TAB: 场景编辑 ============ -->
+      <div class="tabpane on" data-pane="edit">
+
+        <!-- 两个子选项：编辑共用静障碍 / 编辑场景（实时动目标已移入「场景运行」）-->
+        <div id="editSubTabs">
+          <div class="stab on" data-sub="shared">共用静障碍</div>
+          <div class="stab" data-sub="scene">场景</div>
+        </div>
+
+        <!-- ---- 子选项①：编辑共用静障碍 ---- -->
+        <div class="subpane on" data-subpane="shared">
+          <div class="card" data-card="shared">
+            <div class="head"><span class="dot" style="background:var(--warn)"></span>共用静障碍<span style="flex:1"></span><span id="sharedObsCount" class="badge">0</span></div>
+            <div class="body">
+              <p class="hint">水域中长期固定的障碍（防波堤、浅滩等）</p>
+              <div class="seg" id="sharedObsSeg">
+                <button data-t="point">点</button>
+                <button data-t="line">线</button>
+                <button data-t="polygon">面</button>
+              </div>
+              <div class="list" id="sharedObsList"><div class="empty">暂无共用静障碍</div></div>
+              <div class="btnrow" style="margin-top:8px">
+                <button class="sec" id="exportSharedBtn">导出 JSON</button>
+                <button class="sec" id="importSharedBtn">导入 JSON</button>
+                <button class="danger" id="clearSharedBtn" style="flex:none">清空</button>
+              </div>
+              <input type="file" id="sharedFileInput" accept="application/json" style="display:none">
+            </div>
+          </div>
+        </div>
+
+        <!-- ---- 子选项②：编辑场景 ---- -->
+        <div class="subpane" data-subpane="scene">
+
+          <!-- 视图A：场景列表（每行一个场景 + 底部虚线新建） -->
+          <div class="sceneview on" id="sceneListView">
+            <div id="sceneGrid"></div>
+          </div>
+
+          <!-- 视图B：进入某个场景内部编辑 -->
+          <div class="sceneview" id="sceneEditView">
+            <div class="scene-editor-head">
+              <button class="ghost back" id="sceneBackBtn" title="返回场景列表">←</button>
+              <span class="nm" id="sceneEditName">场景</span>
+            </div>
+
+            <!-- 场景 · 静障碍 -->
+            <div class="card" data-card="obs">
+              <div class="head"><span class="dot" style="background:var(--warn)"></span>静障碍<span style="flex:1"></span><span id="obsCount" class="badge">0</span></div>
+              <div class="body">
+                <div class="seg" id="obsTypeSeg">
+                  <button data-t="point">点</button>
+                  <button data-t="line">线</button>
+                  <button data-t="polygon">面</button>
+                </div>
+                <div class="list" id="obsList"><div class="empty">暂无静障碍</div></div>
+              </div>
+            </div>
+
+            <!-- 场景 · 动目标 -->
+            <div class="card" data-card="tgt">
+              <div class="head"><span class="dot" style="background:var(--accent2)"></span>动目标<span style="flex:1"></span><span id="tgtCount" class="badge">0</span></div>
+              <div class="body">
+                <p class="hint">先选择运动模式，再选择外形添加。</p>
+                <label class="fld" style="margin-top:6px">运动模式</label>
+                <select id="tMotion"><option value="straight">直线匀速</option><option value="route">路线跟随</option></select>
+
+                <!-- 外形（仅规则外形有效；长宽由拉框得到，其余属性绘制后在「编辑」里改）-->
+                <div id="rectDims">
+                  <label class="fld">外形</label>
+                  <select id="tHull"><option value="rect">矩形</option><option value="capsule">胶囊</option></select>
+                </div>
+
+                <label class="fld" style="margin-top:8px">添加方式</label>
+                <div class="seg" id="tgtModeSeg">
+                  <button data-m="rect">规则外形</button>
+                  <button data-m="polygon">不规则外形</button>
+                </div>
+
+                <!-- 隐藏兜底：长宽由拉框回填，其余属性用默认，绘制后编辑修改 -->
+                <input id="tLen" type="hidden" value="40">
+                <input id="tWid" type="hidden" value="12">
+
+                <div class="list" id="tgtList"><div class="empty">暂无动目标</div></div>
+              </div>
+            </div>
+
+            <!-- 场景 · 底部操作：导入/导出/清空（编辑与退出自动保存）-->
+            <div class="card" data-card="scnops">
+              <div class="body" style="padding-top:11px">
+                <div class="btnrow">
+                  <button class="sec" id="exportBtn">导出</button>
+                  <button class="sec" id="importBtn">导入</button>
+                  <button class="danger" id="clearSceneBtn" style="flex:none">清空</button>
+                </div>
+                <input type="file" id="fileInput" accept="application/json" style="display:none">
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+      <!-- ============ TAB: 场景运行 ============ -->
+      <div class="tabpane" data-pane="run">
+        <div class="card" data-card="sim">
+          <div class="head"><span class="dot" style="background:#2dd4bf"></span>推演</div>
+          <div class="body">
+            <div class="btnrow" style="margin-top:2px">
+              <button id="playBtn" style="background:#2dd4bf">▶ 开始</button>
+              <button class="danger" id="endBtn">■ 结束</button>
+            </div>
+            <label class="fld">倍速（预留）</label>
+            <div class="seg" id="speedSeg">
+              <button data-x="0.5" disabled>0.5×</button>
+              <button data-x="1" class="on" disabled>1×</button>
+              <button data-x="2" disabled>2×</button>
+              <button data-x="4" disabled>4×</button>
+            </div>
+            <p class="hint">倍速开发中，接口已预留。</p>
+          </div>
+        </div>
+
+        <!-- 实时动目标：运行期临时新增（与场景部分构建方式一致，含运动模式）-->
+        <div class="card" data-card="rt">
+          <div class="head"><span class="dot" style="background:var(--accent2)"></span>实时动目标<span style="flex:1"></span><span id="rtTgtCount" class="badge">0</span></div>
+          <div class="body">
+            <p class="hint" id="rtHint">运行期临时对象，可随时删除，默认不并入场景保存。仅在<b>推演暂停</b>时可添加。</p>
+            <div id="rtControls">
+              <p class="hint">先选择运动模式和外形，再点下方「规则外形 / 不规则外形」在地图上添加。</p>
+              <label class="fld" style="margin-top:6px">运动模式</label>
+              <select id="rtMotion"><option value="straight">直线匀速</option><option value="route">路线跟随</option></select>
+              <div id="rtRectDims">
+                <label class="fld">外形</label>
+                <select id="rtHull"><option value="rect">矩形</option><option value="capsule">胶囊</option></select>
+              </div>
+              <label class="fld" style="margin-top:8px">添加方式</label>
+              <div class="seg" id="rtTgtModeSeg">
+                <button data-m="rect">规则外形</button>
+                <button data-m="polygon">不规则外形</button>
+              </div>
+              <input id="rtLen" type="hidden" value="40">
+              <input id="rtWid" type="hidden" value="12">
+            </div>
+            <div class="list" id="rtTgtList"><div class="empty">暂无实时动目标</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ TAB: 场景复现 ============ -->
+      <div class="tabpane" data-pane="replay">
+        <div class="card" data-card="replay">
+          <div class="head"><span class="dot" style="background:var(--accent2)"></span>场景复现</div>
+          <div class="body">
+            <div class="soon">场景复现功能开发中<br>（接口已预留）</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ TAB: 录制回放 ============ -->
+      <div class="tabpane" data-pane="record">
+        <div class="card" data-card="record">
+          <div class="head"><span class="dot" style="background:var(--danger)"></span>录制回放</div>
+          <div class="body">
+            <div class="soon">录制回放功能开发中<br>（接口已预留）</div>
+          </div>
+        </div>
+      </div>
+
+      </div><!-- /.scroll -->
+    </div><!-- /#sideContent -->
+  </div><!-- /#side -->
+</div>
+
+<script>
+/* ============================================================
+   1) 配置：填入你自己的高德 Web端(JS API) Key 与安全密钥
+   ============================================================ */
+const AMAP_CONFIG = {
+  key: "c6a21ab95477720a4c6373496280a23b",          // ← 在此填入高德 JS API Key
+  securityJsCode: "f90021be298674b140c3f22f4ad30264",// ← 在此填入安全密钥
+  center: [110.565431, 20.006316],     // 初始中心 [lng,lat] GCJ-02
+  zoom: 14
+};
+
+/* ============================================================
+   2) 船端 MQTT 配置：自船状态由船端实时下发
+   连接地址 ws://orca-tech.cn:8083/mqtt
+   ============================================================ */
+const MQTT_CONFIG = {
+  url: "ws://orca-tech.cn:8083/mqtt",
+  options: {
+    reconnectPeriod: 3000,   // 断线自动重连间隔(ms)
+    connectTimeout: 8000,    // 连接超时(ms)
+    clean: true,
+    clientId: "web_v2_" + Math.floor(Math.random()*1e8).toString(36)
+  }
+};
+/* ============================================================
+   多船主题：下发/上报分用不同前缀，均带船号后缀
+     下发(网页→船)：emulator_interaction_sub_<ship_num>
+     上报(船→网页)：emulator_interaction_pub_<ship_num>
+   同一主题内用 payload.type 区分消息种类（MqttPayloadType）
+   ============================================================ */
+const SHIP_NUMS = [1,2,3,4,5];              // 写死，与交互模块 _global.py SHIPS 一致
+const SUB_TOPIC_PREFIX = "emulator_interaction_sub";   // 下发（网页 publish）
+const PUB_TOPIC_PREFIX = "emulator_interaction_pub";   // 上报（网页 subscribe）
+const subTopic = n => `${SUB_TOPIC_PREFIX}_${n}`;      // 构造下发主题
+const pubTopic = n => `${PUB_TOPIC_PREFIX}_${n}`;      // 构造上报主题
+const parseShipNum = topic => {                        // 从上报主题解析船号
+  const p = PUB_TOPIC_PREFIX + "_";
+  return topic.startsWith(p) && /^\d+$/.test(topic.slice(p.length)) ? +topic.slice(p.length) : null;
+};
+const PAYLOAD_TYPE = {                       // 与 MqttPayloadType 精确对齐（下划线写法）
+  DYNAMIC_TARGET:'dynamic_target', STATIC_OBSTACLE:'map/adas_env_info',   // 下发（静障碍=地图环境信息主题）
+  LOCALIZATION:'loca_odometry', MAIN_SHIP:'main_ship',                  // 上报
+  MAIN_TASK:'main_task', TRAJECTORY:'planning_trajectory'
+};
+let currentShipNum = null;                   // 当前登录的本船编号
+/* 坐标转换开关：船端定位若为 WGS-84，与高德 GCJ-02 存在偏移时打开 */
+const USE_WGS84_TO_GCJ02 = false;
+/* 下发坐标转换开关：网页 GCJ-02 → 船端。默认关闭=直接发 GCJ-02；
+   若船端期望 WGS-84(GPS)，置 true 走 gcj02ToWgs84 */
+const USE_GCJ02_TO_WGS84_ON_PUB = false;
+/* 静障碍兜底重发间隔(ms)：无变化时按固定帧率重发，默认 10s(=0.1Hz)。可在设置里改 */
+let STATIC_OBSTACLE_REPUB_MS = 10000;
+/* 推演步进/动目标下发间隔(ms)：100ms=10Hz。外推步长与此保持一致。可在设置里改 */
+let SIM_STEP_MS = 100;
+/* 距离参考配置 */
+const SHOW_SCALE_BAR = true;          // 地图默认比例尺（scale bar）
+const RANGE_RINGS = {
+  show: true,                         // 是否显示距离圆环
+  radii: [500, 1000, 2000],           // 各层半径(米)，至少三层，可增减
+  color: '#64748b'                    // 圆环与标注颜色（中性灰蓝，避免与动目标蓝混淆）
+};
+/* 本船轨迹配置 */
+const SHIP_TRACK = {
+  show: true,                         // 是否显示本船轨迹
+  histMax: 2000,                      // 历史轨迹最多保留点数（超出丢最旧）
+  minMoveM: 0.5,                      // 相邻历史点最小间距(米)，去抖抽稀
+  trackColor: '#7ff3e6'               // 本船轨迹颜色（历史与局部统一，不区分颜色/样式）
+};
+</script>
+<script>
+/* 安全密钥（JS API 2.0 要求） */
+if (AMAP_CONFIG.securityJsCode && AMAP_CONFIG.securityJsCode !== "YOUR_SECURITY_CODE") {
+  window._AMapSecurityConfig = { securityJsCode: AMAP_CONFIG.securityJsCode };
+}
+function loadAMap(){
+  if (!AMAP_CONFIG.key || AMAP_CONFIG.key === "YOUR_AMAP_JSAPI_KEY") {
+    document.getElementById('apiwarn').classList.add('show');
+    return;
+  }
+  const s = document.createElement('script');
+  s.src = `https://webapi.amap.com/maps?v=2.0&key=${AMAP_CONFIG.key}`;
+  s.onload = boot;
+  s.onerror = ()=>document.getElementById('apiwarn').classList.add('show');
+  document.head.appendChild(s);
+}
+window.addEventListener('load', loadAMap);
+</script>
+<script>
+/* ============================================================
+   主程序
+   ============================================================ */
+function boot(){
+"use strict";
+
+/* ---------- 工具函数 ---------- */
+const KN2MS = 0.514444;                       // 节 → m/s
+const R_EARTH = 6378137;
+const deg2rad = d => d*Math.PI/180;
+const rad2deg = r => r*180/Math.PI;
+const norm360 = a => ((a%360)+360)%360;
+const fmt = (n,d=5)=> (n==null||isNaN(n))?'—':Number(n).toFixed(d);
+
+// 以米偏移生成经纬度（GCJ-02 近似平面，用于本地小范围船体/目标外形足够精确）
+function offsetMeters(lng, lat, east, north){
+  const dLat = north / 111320;
+  const dLng = east  / (111320*Math.cos(deg2rad(lat)));
+  return [lng+dLng, lat+dLat];
+}
+// 沿 course 推进 dist 米
+function moveAlong(lng, lat, courseDeg, dist){
+  const east  = dist*Math.sin(deg2rad(courseDeg));
+  const north = dist*Math.cos(deg2rad(courseDeg));
+  return offsetMeters(lng, lat, east, north);
+}
+// 由中心指向目标点的方位角（0=正北, 顺时针为正）
+function bearingDeg(lng0, lat0, lng1, lat1){
+  const east  = (lng1-lng0)*Math.cos(deg2rad(lat0));
+  const north = (lat1-lat0);
+  return norm360(rad2deg(Math.atan2(east, north)));
+}
+// 两经纬度间距离(米)，Haversine
+function distMeters(lng0, lat0, lng1, lat1){
+  const dLat=deg2rad(lat1-lat0), dLng=deg2rad(lng1-lng0);
+  const a=Math.sin(dLat/2)**2 + Math.cos(deg2rad(lat0))*Math.cos(deg2rad(lat1))*Math.sin(dLng/2)**2;
+  return 2*R_EARTH*Math.asin(Math.min(1,Math.sqrt(a)));
+}
+// 对角拉框 → 轴对齐矩形几何：两对角 c0/c1 → {L(长边),W(短边),course(长边方向),center}
+function boxGeom(c0, c1){
+  const ew=distMeters(c0[0],c0[1], c1[0],c0[1]);   // 东西跨度(米)
+  const ns=distMeters(c0[0],c0[1], c0[0],c1[1]);   // 南北跨度(米)
+  const L=Math.max(ew,ns), W=Math.min(ew,ns);
+  const course=ew>=ns?90:0;                        // 长边东西→90°，南北→0°
+  const center=[(c0[0]+c1[0])/2,(c0[1]+c1[1])/2];
+  return {L,W,course,center};
+}
+
+/* 生成以 center 为中心、朝向 yaw 的矩形/胶囊外形多边形（yaw: 0=正北, 顺时针） */
+function rectPolygon(lng, lat, L, W, yawDeg){
+  const hl=L/2, hw=W/2;
+  const corners=[[ hw,  hl],[ hw, -hl],[-hw, -hl],[-hw,  hl]]; // [right,forward]
+  return corners.map(([r,f])=>rotPt(lng,lat,r,f,yawDeg));
+}
+function capsulePolygon(lng, lat, L, W, yawDeg){
+  // 胶囊 = 中间宽 W 的直段（长 2*straight）+ 前后两个半径 hw=W/2 的半圆帽
+  const hw=W/2, straight=Math.max(0,(L-W)/2), pts=[], seg=12;
+  // 前帽：从右舷边 (右=+hw, 前=straight) 绕过船首尖 (前=straight+hw) 到左舷边 (右=-hw)
+  for(let i=0;i<=seg;i++){ const a=Math.PI*i/seg; pts.push([Math.cos(a)*hw, straight+Math.sin(a)*hw]); }
+  // 后帽：从左舷边 (右=-hw, 后=-straight) 绕过船尾尖 (后=-straight-hw) 到右舷边 (右=+hw)
+  for(let i=0;i<=seg;i++){ const a=Math.PI+Math.PI*i/seg; pts.push([Math.cos(a)*hw, -straight+Math.sin(a)*hw]); }
+  return pts.map(([r,f])=>rotPt(lng,lat,r,f,yawDeg));
+}
+// 局部坐标 (right=+x 船右舷, forward=+y 船首) → 经纬度，按 yaw 旋转
+function rotPt(lng,lat,right,forward,yawDeg){
+  const y=deg2rad(yawDeg);
+  // 船首方向单位向量(指向 yaw)；右舷为其顺时针90°
+  const east  = forward*Math.sin(y) + right*Math.cos(y);
+  const north = forward*Math.cos(y) - right*Math.sin(y);
+  return offsetMeters(lng,lat,east,north);
+}
+// 船体外形（带船首尖）
+function shipPolygon(lng,lat,L,W,yawDeg){
+  const hl=L/2,hw=W/2;
+  const local=[[0,hl],[hw,hl*0.55],[hw,-hl],[-hw,-hl],[-hw,hl*0.55]];
+  return local.map(([r,f])=>rotPt(lng,lat,r,f,yawDeg));
+}
+// 单点动目标：有朝向的箭头形状（固定像素级尺寸，朝向 yaw=course）
+// size 为箭头“半长”（米），local 坐标 right=+x 右舷, forward=+y 指向 yaw
+function arrowMarkerPolygon(lng,lat,yawDeg,size){
+  const s=size||14, w=s*0.62;
+  // 箭头：尖端在前 (0,s)，两翼 (±w,-s*0.35)，尾部内凹 (0,-s*0.15) 形成飞镖状
+  const local=[[0,s],[w,-s*0.35],[0,-s*0.15],[-w,-s*0.35]];
+  return local.map(([r,f])=>rotPt(lng,lat,r,f,yawDeg));
+}
+
+/* ---------- 地图 ---------- */
+const map = new AMap.Map('map', {
+  center: AMAP_CONFIG.center, zoom: AMAP_CONFIG.zoom,
+  viewMode:'2D', mapStyle:'amap://styles/darkblue', features:['bg','road','point']
+});
+
+/* 地图默认比例尺（scale bar）：一角显示、随缩放自动更新 */
+if(SHOW_SCALE_BAR){
+  try{
+    AMap.plugin(['AMap.Scale'], ()=>{
+      map.addControl(new AMap.Scale({position:'RB'}));   // 右下角（避开左下角时钟）
+    });
+  }catch(e){ console.warn('[Scale] 比例尺插件加载失败', e); }
+}
+
+/* ---------- 主题切换（深色/浅色）---------- */
+const MAP_STYLE={ dark:'amap://styles/darkblue', light:'amap://styles/normal' };
+function applyTheme(theme){
+  const light = theme==='light';
+  document.body.classList.toggle('light', light);
+  try{ map.setMapStyle(MAP_STYLE[light?'light':'dark']); }catch(e){}
+  const btn=document.getElementById('themeBtn'); if(btn) btn.textContent = light ? '☀️ 浅色' : '🌙 深色';
+  try{ localStorage.setItem('usv_theme', theme); }catch(e){}
+}
+(function initTheme(){
+  let saved='dark';
+  try{ saved=localStorage.getItem('usv_theme')||'dark'; }catch(e){}
+  applyTheme(saved);
+  document.getElementById('themeBtn').addEventListener('click',()=>{
+    applyTheme(document.body.classList.contains('light')?'dark':'light');
+  });
+})();
+
+/* ---------- 状态 ---------- */
+let obsId=0, tgtId=0;
+/* 三层数据模型（归属与生命周期）——地图上「当前项」用单数组 + origin 字段区分：
+   ① 共用静障碍 obstacles(origin==='shared')：长期固定障碍，跨场景常驻，独立增删，直接绘制
+   ② 场景 obstacles(origin==='scene') / targets(origin==='scene')：当前激活场景的静障碍+动目标
+   ③ 实时动目标 targets(origin==='realtime')：运行期临时对象，与场景数据融合下发，默认不并入保存
+   —— 下发不区分 origin：全部静障碍打一包、全部动目标逐条发（publish* 函数不过滤）*/
+const obstacles=[];   // {id,type,coords,remark,origin:'shared'|'scene',overlays:[]}
+const targets=[];     // {id,position,speed,course,yaw,shape,remark,origin:'scene'|'realtime',overlay,arrow,label}
+let pendingObsOrigin='scene';   // 下一次静障碍绘制的归属（shared 页=shared / 场景页=scene）
+let newTgtOwner='scene';        // 下一次动目标绘制的归属（场景页=scene / 实时页=realtime）
+/* 场景集合：{id, name, obstacles:[], targets:[], runConfig} —— 共用静障碍不入场景 */
+const scenes=[];      // 已建场景（内存态，含未持久化字段）
+let activeSceneId=null;   // 当前「在地图上加载」的场景 id（编辑或选中时载入）
+let selectedSceneId=null; // 选中用于仿真的场景 id（列表点卡片本体切换；单选）
+let sceneSeq=0;           // 场景 id 自增
+const LS_SHARED='usv_shared_obs';   // 共用静障碍持久化键
+const LS_SCENES='usv_scenes_v2';    // 场景集合持久化键
+let simStarted=false;     // 推演是否已开始（用于实时动目标门控：仅已开始且暂停时可加）
+let ship=null;        // 自船（船端定位实时下发）{pos,heading,len,beam,att,omega,time,raw,overlay,arrow,label}
+let mqttClient=null;   // MQTT 客户端
+let lastLoca=null;     // 最近一帧定位原始报文
+let lastTraj=null;     // 最近一帧轨迹原始报文
+let lastShip=null;     // 最近一帧 Ship 原始报文
+
+/* ---------- 点选查看属性（InfoWindow）---------- */
+let infoWin=null;
+function ensureInfoWin(){
+  if(!infoWin) infoWin=new AMap.InfoWindow({isCustom:false,offset:new AMap.Pixel(0,-12)});
+  return infoWin;
+}
+// 生成属性表 HTML（rows: [[k,v],...]）
+function propTable(title, rows){
+  const body=rows.map(([k,v])=>`<div style="display:flex;justify-content:space-between;gap:14px;font-size:12px;line-height:1.7">
+    <span style="color:#8aa0b3;white-space:nowrap">${esc(k)}</span>
+    <span style="color:#e6eef5;font-family:Consolas,monospace;text-align:right">${esc(v)}</span></div>`).join('');
+  return `<div style="min-width:190px;max-width:280px;background:#16222e;border:1px solid #273a4c;border-radius:8px;padding:9px 11px">
+    <div style="font-size:13px;font-weight:600;color:#38bdf8;margin-bottom:5px">${esc(title)}</div>${body}</div>`;
+}
+// 动目标属性
+function targetInfoHtml(t){
+  const shp=t.shape.mode==='rect'?`${t.shape.hull==='capsule'?'胶囊':'矩形'} ${t.shape.L}×${t.shape.W}m`:('多边形 '+t.shape.points.length+'点');
+  const rows=[
+    ['ID', t.id],
+    ['备注', t.remark||'—'],
+    ['MMSI', (t.mmsi==null?-1:t.mmsi)],
+    ['船类别 shiptype', (t.shiptype==null?0:t.shiptype)],
+    ['外形', shp],
+    ['经度 lon', fmt(t.position[0],6)],
+    ['纬度 lat', fmt(t.position[1],6)],
+    ['航向 course', fmt(t.course,1)+'°'],
+    ['朝向 heading', fmt(t.yaw,1)+'°'],
+    ['速度', fmt(t.speed,1)+' m/s'],
+  ];
+  // 运动模式
+  const mo=t.motion||{mode:'straight'};
+  if(mo.mode==='route'){
+    const oa={stop:'停止',loop:'循环',pingpong:'往返'}[mo.onArrive]||mo.onArrive;
+    rows.splice(5,0,['运动','路线跟随 '+(mo.points?mo.points.length:0)+'点 · 到终点'+oa]);
+  }else{
+    rows.splice(5,0,['运动','直线匀速']);
+  }
+  if(ship&&ship.pos){
+    const d=distMeters(ship.pos[0],ship.pos[1],t.position[0],t.position[1]);
+    rows.push(['距本船', d<1000?fmt(d,0)+' m':fmt(d/1000,2)+' km']);
+  }
+  return propTable(tgtDisplayName(t), rows);
+}
+// 静障碍属性
+function obstacleInfoHtml(o){
+  const typeName={point:'点',line:'线',polygon:'面'}[o.type]||o.type;
+  const rows=[
+    ['ID', o.id],
+    ['备注', o.remark||'—'],
+    ['类型', typeName+'障碍'],
+    ['点数', o.coords.length],
+  ];
+  const c=centroid(o.coords);
+  rows.push(['中心 lng', fmt(c[0],6)]);
+  rows.push(['中心 lat', fmt(c[1],6)]);
+  if(ship&&ship.pos){
+    const d=distMeters(ship.pos[0],ship.pos[1],c[0],c[1]);
+    rows.push(['距本船', d<1000?fmt(d,0)+' m':fmt(d/1000,2)+' km']);
+  }
+  return propTable(obsDisplayName(o), rows);
+}
+// 打开信息窗（绘制/标航向中不弹）
+function openInfo(html, lnglat){
+  if(draw||rectOrient) return;
+  const w=ensureInfoWin(); w.setContent(html); w.open(map, lnglat);
+}
+// 给一组覆盖物绑定点击→弹属性
+function bindInfo(overlays, getHtml, getPos){
+  overlays.forEach(ov=>ov && ov.on && ov.on('click', e=>{
+    const pos = getPos ? getPos() : (e && e.lnglat);
+    openInfo(getHtml(), pos);
+  }));
+}
+
+/* ---------- UI helpers ---------- */
+const $=id=>document.getElementById(id);
+function banner(txt,showBtns=true){
+  $('bannerTxt').innerHTML=txt;
+  $('banner').classList.add('show');
+  $('bannerFinish').style.display=showBtns?'':'none';
+  $('bannerCancel').style.display=showBtns?'':'none';
+}
+function hideBanner(){ $('banner').classList.remove('show'); }
+
+/* ============================================================
+   通用交互式绘制控制器
+   - point  : 单击放置 1 点立即完成
+   - line   : 单击加点，双击 / 「结束绘制」完成（≥2 点）
+   - polygon: 单击加点，双击 / 「结束绘制」完成（≥3 点）
+   onDone(coords[[lng,lat],...])；coords 即 GCJ-02
+   ============================================================ */
+let draw=null;
+function startDraw(type, color, onDone, prefix){
+  cancelDraw();
+  // prefix：可选起点（如路线起点=目标位置），预览从该点起连
+  draw={type,color,onDone,verts:[],nodes:[],preview:null,prefix:prefix||null};
+  map.setDefaultCursor('crosshair');
+  map.setStatus({doubleClickZoom:false});
+  if(type==='point') banner('单击地图放置 <b>点</b>');
+  else banner(`单击加点，<b>双击</b>或点「结束绘制」完成（${type==='polygon'?'≥3':'≥2'} 点）`);
+  // 点：只显示「取消」；线/面：显示「结束绘制」+「取消」
+  $('bannerFinish').style.display = type==='point' ? 'none':'';
+  $('bannerCancel').style.display='';
+}
+function drawAddVertex(lnglat){
+  if(!draw) return;
+  const ll=[lnglat.lng,lnglat.lat];
+  if(draw.type==='point'){ draw.onDone([ll]); cancelDraw(); return; }
+  draw.verts.push(ll);
+  const node=new AMap.CircleMarker({center:ll,radius:4,fillColor:draw.color,fillOpacity:1,strokeColor:'#fff',strokeWeight:1,zIndex:200});
+  node.setMap(map); draw.nodes.push(node);
+  refreshPreview();
+}
+function refreshPreview(){
+  if(draw.preview){ map.remove(draw.preview); draw.preview=null; }
+  // 有起点前缀时（路线），从前缀连到各绘制点；否则需 ≥2 点才连
+  const pts = draw.prefix ? [draw.prefix].concat(draw.verts) : draw.verts;
+  if(pts.length<2) return;
+  const path = draw.type==='polygon' ? pts.concat([pts[0]]) : pts;
+  draw.preview=new AMap.Polyline({path,strokeColor:draw.color,strokeWeight:2,strokeStyle:'dashed',zIndex:150});
+  draw.preview.setMap(map);
+}
+function finishDraw(){
+  if(!draw) return;
+  // 有起点前缀时（路线），前缀已算一点，线只需再画 ≥1 点
+  let need = draw.type==='polygon'?3:2;
+  if(draw.prefix) need-=1;
+  if(draw.verts.length<need){ return; }
+  const coords=draw.verts.slice(), cb=draw.onDone;
+  cleanupDraw(); cb(coords);
+}
+function cancelDraw(){
+  if(draw) cleanupDraw();
+}
+function cleanupDraw(){
+  if(!draw) return;
+  draw.nodes.forEach(n=>map.remove(n));
+  if(draw.preview) map.remove(draw.preview);
+  draw=null;
+  map.setDefaultCursor('');
+  map.setStatus({doubleClickZoom:true});
+  drawingObs=false;
+  drawingTgt=false;
+  clearSegHighlight();   // 分段按钮高亮熄灭
+  hideBanner();
+}
+// 清除静障碍/动目标分段按钮的高亮（四组分段）
+function clearSegHighlight(){
+  ['obsTypeSeg','sharedObsSeg','tgtModeSeg','rtTgtModeSeg'].forEach(id=>{
+    const el=$(id); if(el) el.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+  });
+}
+
+/* 中央地图点击/移动/抬起：绘制 / 标矩形（对角拉框 + 手柄旋转）*/
+map.on('click',e=>{
+  if(rectOrient && rectOrient.phase==='box'){
+    const ll=[e.lnglat.lng,e.lnglat.lat];
+    if(!rectOrient.c0){
+      // 第一次单击：矩形一角
+      rectOrient.c0=ll;
+      $('bannerTxt').innerHTML='拖到 <b>对角</b>拉出矩形，再次单击定长宽';   // 只改文字，保持仅「取消」
+      rectTgtBoxPreview(ll);
+    }else{
+      // 第二次单击：定对角 → 算 L/W/中心/course
+      const gb=boxGeom(rectOrient.c0, ll);
+      const L=Math.max(Math.round(gb.L),1), W=Math.max(Math.round(gb.W),1);
+      const center=gb.center.slice(), course=norm360(gb.course), hull=hullVal();
+      const [lenId,widId]=lenWidIds(); if($(lenId)) $(lenId).value=L; if($(widId)) $(widId).value=W;   // 回填面板
+      const routeMode = motionVal()==='route';
+      if(routeMode){
+        // 路线模式：朝向由路线决定，跳过手柄旋转直接生成
+        cleanupRectOrient();
+        finishTgt({mode:'rect',L,W,hull,course}, center);
+      }else{
+        rectOrient.center=center; rectOrient.L=L; rectOrient.W=W; rectOrient.course=course;
+        rectOrient.phase='rotate';
+        if(rectOrient.boxPrev){ map.remove(rectOrient.boxPrev); rectOrient.boxPrev=null; }
+        $('bannerTxt').innerHTML='拖动 <b>圆点手柄</b> 旋转设置朝向';   // 只改文字，保持仅「取消」
+        rectTgtDraw();
+      }
+    }
+    return;
+  }
+  if(draw){ drawAddVertex(e.lnglat); }
+});
+map.on('mousemove',e=>{
+  if(!rectOrient) return;
+  const ll=[e.lnglat.lng,e.lnglat.lat];
+  if(rectOrient.phase==='box' && rectOrient.c0){
+    rectTgtBoxPreview(ll);
+  }else if(rectOrient.phase==='rotate' && rectOrient.rotating){
+    rectOrient.course=norm360(bearingDeg(rectOrient.center[0],rectOrient.center[1],ll[0],ll[1]));
+    $('bannerTxt').innerHTML=`朝向 <b>${fmt(rectOrient.course,0)}°</b>`;
+    rectTgtDraw();
+  }
+});
+map.on('mouseup',()=>{
+  if(rectOrient && rectOrient.phase==='rotate' && rectOrient.rotating){
+    // 松开手柄即生成
+    const center=rectOrient.center.slice(), course=norm360(rectOrient.course);
+    if(rectOrient.kind==='polygon'){
+      const pts=rotatePolyPts(rectOrient.basePts, center, course);   // 顶点随朝向旋转
+      cleanupRectOrient();
+      finishTgt({mode:'polygon',points:pts}, center, course);
+    }else{
+      const L=rectOrient.L, W=rectOrient.W, hull=hullVal();
+      cleanupRectOrient();
+      finishTgt({mode:'rect',L,W,hull,course}, center);
+    }
+  }
+});
+// 拉框阶段的矩形预览（对角虚线框 + 目标外形预览）
+function rectTgtBoxPreview(mouseLL){
+  const gb=boxGeom(rectOrient.c0, mouseLL);
+  rectOrient.center=gb.center; rectOrient.L=gb.L; rectOrient.W=gb.W; rectOrient.course=gb.course;
+  const hull=hullVal(), fn=hull==='capsule'?capsulePolygon:rectPolygon;
+  if(rectOrient.preview){ map.remove(rectOrient.preview); }
+  rectOrient.preview=new AMap.Polygon({path:fn(gb.center[0],gb.center[1],Math.max(gb.L,1),Math.max(gb.W,1),gb.course),
+    strokeColor:TGT_COLOR,fillColor:TGT_COLOR,fillOpacity:.3,strokeWeight:2,strokeStyle:'dashed',zIndex:150});
+  rectOrient.preview.setMap(map);
+  if(rectOrient.boxPrev){ map.remove(rectOrient.boxPrev); }
+  rectOrient.boxPrev=new AMap.Polyline({path:[rectOrient.c0,[mouseLL[0],rectOrient.c0[1]],mouseLL,[rectOrient.c0[0],mouseLL[1]],rectOrient.c0],
+    strokeColor:'#fff',strokeWeight:1,strokeStyle:'dashed',zIndex:151});
+  rectOrient.boxPrev.setMap(map);
+  $('bannerTxt').innerHTML=`船长 <b>${fmt(gb.L,0)}m</b> · 船宽 <b>${fmt(gb.W,0)}m</b>，再次单击定长宽`;
+}
+map.on('dblclick',()=>{ if(draw && draw.type!=='point') finishDraw(); });
+
+/* 折叠卡片 */
+document.querySelectorAll('.card>.head').forEach(h=>{
+  h.addEventListener('click',()=>h.nextElementSibling.classList.toggle('collapsed'));
+});
+
+/* 分段控件：点选即开始添加（点/线/面 → 画静障碍；标点/标矩形 → 画动目标）*/
+let obsType='point', tgtMode='rect';
+let useHullSel='tHull';   // 当前生效的外形下拉 id（场景=tHull / 实时=rtHull）
+function hullVal(){ const el=$(useHullSel); return el?el.value:'rect'; }
+// 当前归属对应的「运动模式」下拉值（场景=tMotion / 实时=rtMotion）
+function motionVal(){ const el=$(newTgtOwner==='realtime'?'rtMotion':'tMotion'); return el?el.value:'straight'; }
+// 当前归属对应的长/宽回填隐藏输入 id
+function lenWidIds(){ return newTgtOwner==='realtime' ? ['rtLen','rtWid'] : ['tLen','tWid']; }
+// 运动模式由下拉 #tMotion 决定（读取时取当前值）
+// 场景页 · 静障碍分段（归属=scene）
+$('obsTypeSeg').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  if(!requireActiveScene()) return;
+  obsType=b.dataset.t; pendingObsOrigin='scene';
+  $('obsTypeSeg').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  startObsDraw();
+});
+// 共用静障碍分段（归属=shared）
+$('sharedObsSeg').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  obsType=b.dataset.t; pendingObsOrigin='shared';
+  $('sharedObsSeg').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  startObsDraw();
+});
+// 场景页 · 动目标分段（归属=scene）
+$('tgtModeSeg').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  if(!requireActiveScene()) return;
+  tgtMode=b.dataset.m; newTgtOwner='scene'; useHullSel='tHull';
+  $('tgtModeSeg').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  $('rectDims').style.display = tgtMode==='rect'?'':'none';
+  startTgtDraw();
+});
+// 场景运行页 · 实时动目标分段（归属=realtime，仅推演暂停时可用；与场景构建方式一致，含运动模式）
+$('rtTgtModeSeg').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  if(!realtimeAllowed()){ alert('实时动目标仅在推演暂停时可添加。请先在「场景运行」点「推演」开始后暂停。'); return; }
+  tgtMode=b.dataset.m; newTgtOwner='realtime'; useHullSel='rtHull';
+  $('rtTgtModeSeg').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  $('rtRectDims').style.display = tgtMode==='rect'?'':'none';
+  startTgtDraw();
+});
+
+/* ============================================================
+   静障碍
+   ============================================================ */
+const OBS_COLOR='#f59e0b';         // 静障碍统一用橙（场景 / 共用）
+const SHARED_OBS_COLOR=OBS_COLOR;  // 共用静障碍与场景静障碍同色（橙）
+let drawingObs=false;
+
+function startObsDraw(){
+  if(drawingObs||draw||rectOrient) return;
+  drawingObs=true;
+  startDraw(obsType, OBS_COLOR, coords=>finishObs(obsType,coords));
+}
+
+$('bannerFinish').addEventListener('click',()=>{ if(draw) finishDraw(); });
+$('bannerCancel').addEventListener('click',()=>{ if(rectOrient) cleanupRectOrient(); else cancelDraw(); });
+// Esc：取消当前绘制（静障碍 / 动目标）
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    if(rectOrient){ cleanupRectOrient(); if(document.activeElement&&document.activeElement.blur) document.activeElement.blur(); }
+    else if(draw){ cancelDraw(); if(document.activeElement&&document.activeElement.blur) document.activeElement.blur(); }
+  }
+});
+
+function finishObs(type,coords){
+  // 绘制完成即生成（不再弹备注输入）；备注可在右侧列表点「备注」补
+  const remark='';
+  const origin=pendingObsOrigin;   // shared（共用）/ scene（本场景）
+  const overlays=buildObsOverlays(type,coords,remark,obsColor(origin));
+  const o={id:++obsId,type,coords,remark,origin,overlays};
+  obstacles.push(o);
+  attachObsInfo(o);
+  renderObsList();
+  if(origin==='shared') persistShared(); else syncActiveScene();
+  onObstaclesChanged();   // 新增障碍：推演中立即重发
+}
+// 静障碍归属对应颜色：共用=紫，场景=橙
+function obsColor(origin){ return origin==='shared' ? SHARED_OBS_COLOR : OBS_COLOR; }
+// 点选静障碍覆盖物 → 弹属性
+function attachObsInfo(o){
+  const pos=()=>centroid(o.coords);
+  bindInfo(o.overlays, ()=>obstacleInfoHtml(o), pos);
+}
+function defaultObsRemark(t){return t==='point'?'灯浮':(t==='line'?'防波堤':'浅滩');}
+
+// 静障碍显示名：有备注用备注，否则「静障碍<序号>」（序号=同归属列表内位置）
+function obsDisplayName(o){
+  const peers=obstacles.filter(x=>x.origin===o.origin);
+  return o.remark || ((o.origin==='shared'?'共用障碍':'静障碍')+(peers.indexOf(o)+1));
+}
+// 渲染两个静障碍列表：共用(#sharedObsList) / 场景(#obsList)
+function renderObsList(){
+  const shared=obstacles.filter(o=>o.origin==='shared');
+  const scene=obstacles.filter(o=>o.origin==='scene');
+  renderObsListInto('sharedObsList','sharedObsCount',shared,'shared');
+  renderObsListInto('obsList','obsCount',scene,'scene');
+}
+function renderObsListInto(listId,countId,arr,origin){
+  const el=$(listId); if(!el) return;
+  if($(countId)) $(countId).textContent=arr.length;
+  if(!arr.length){ el.innerHTML='<div class="empty">'+(origin==='shared'?'暂无共用静障碍':'暂无静障碍')+'</div>'; return; }
+  el.innerHTML='';
+  const c=obsColor(origin);
+  arr.forEach(o=>{
+    const typeName={point:'点',line:'线',polygon:'面'}[o.type];
+    const ob=origin==='shared'?'<span class="lbadge shared">共用</span>':'<span class="lbadge sceneobs">场景</span>';
+    const row=document.createElement('div');row.className='item';
+    row.innerHTML=`<span class="swatch" style="background:${c}"></span>
+      <div class="meta"><div class="t">${esc(obsDisplayName(o))}${ob}</div>
+      <div class="s">${typeName}障碍 · ${o.coords.length} 点</div></div>`;
+    const f=mkBtn('定位','ghost mini',()=>focusCoords(o.coords));
+    const e=mkBtn('备注','sec mini',()=>{const r=prompt('修改备注：',o.remark);if(r!=null){o.remark=r;updateObsLabel(o);renderObsList();persistObsOrigin(o.origin);}});
+    const d=mkBtn('删','danger mini',()=>{
+      o.overlays.forEach(v=>map.remove(v));obstacles.splice(obstacles.indexOf(o),1);
+      renderObsList();persistObsOrigin(origin);onObstaclesChanged();
+    });
+    row.append(f,e,d); el.appendChild(row);
+    updateObsLabel(o);   // 同步地图标签（删除重排后序号跟随更新）
+  });
+}
+// 按归属持久化：shared→localStorage；scene→回写激活场景
+function persistObsOrigin(origin){ if(origin==='shared') persistShared(); else syncActiveScene(); }
+function updateObsLabel(o){
+  const t=o.overlays.find(v=>v instanceof AMap.Text);
+  if(t) t.setText(obsDisplayName(o));
+}
+
+/* ============================================================
+   船体状态（自船）—— 由船端 MQTT 实时下发，只读展示 + 地图渲染
+   ============================================================ */
+const SHIP_LEN=30, SHIP_BEAM=8;      // 默认外形尺寸（船端暂未下发船长/宽）
+const HEADING_VEC_LEN=60;            // 航向矢量固定长度(m)，只用 eul.yaw
+
+$('focusShipBtn').addEventListener('click',()=>{ if(ship) map.setZoomAndCenter(16,ship.pos); });
+
+/* 距离圆环 显示/隐藏 切换 */
+$('toggleRingsBtn').textContent='距离圆环：'+(RANGE_RINGS.show?'开':'关');
+$('toggleRingsBtn').addEventListener('click',()=>{
+  RANGE_RINGS.show=!RANGE_RINGS.show;
+  $('toggleRingsBtn').textContent='距离圆环：'+(RANGE_RINGS.show?'开':'关');
+  if(RANGE_RINGS.show) drawRangeRings(); else clearRangeRings();
+});
+
+/* 本船轨迹：默认开启；「清除任务与轨迹」清当前任务航路点 + 历史/局部轨迹 */
+$('clearTrackBtn').addEventListener('click',()=>{
+  clearShipTracks();   // 历史轨迹 + 局部轨迹
+  clearRoute();        // 当前任务航路点
+  // 重置任务状态为无任务
+  taskEverStarted=false; lastTraj=null; updateTaskStatus();
+  setV('ms_type','—'); setV('ms_progress','—');
+});
+
+/* 距离圆环半径：界面修改路径（逗号分隔，可增减圈数）*/
+$('ringRadii').value=RANGE_RINGS.radii.join(',');
+$('applyRingsBtn').addEventListener('click',()=>{
+  const radii=$('ringRadii').value.split(',')
+    .map(s=>parseFloat(s.trim())).filter(v=>!isNaN(v)&&v>0)
+    .sort((a,b)=>a-b);
+  if(!radii.length){ alert('请输入至少一个有效半径(米)，如 500,1000,2000'); return; }
+  RANGE_RINGS.radii=radii;
+  $('ringRadii').value=radii.join(',');
+  if(RANGE_RINGS.show) drawRangeRings();
+});
+
+/* 坐标转换钩子：船端定位若为 WGS-84 与 GCJ-02 有偏移时开启（默认直接透传） */
+function toMapCoord(lng,lat){
+  return USE_WGS84_TO_GCJ02 ? wgs84ToGcj02(lng,lat) : [lng,lat];
+}
+// 标准 WGS-84 → GCJ-02（火星坐标）近似算法；默认关闭，接口留好
+function wgs84ToGcj02(lng,lat){
+  const a=6378245.0, ee=0.00669342162296594323;
+  function tLat(x,y){let r=-100+2*x+3*y+0.2*y*y+0.1*x*y+0.2*Math.sqrt(Math.abs(x));
+    r+=(20*Math.sin(6*x*Math.PI)+20*Math.sin(2*x*Math.PI))*2/3;
+    r+=(20*Math.sin(y*Math.PI)+40*Math.sin(y/3*Math.PI))*2/3;
+    r+=(160*Math.sin(y/12*Math.PI)+320*Math.sin(y*Math.PI/30))*2/3;return r;}
+  function tLng(x,y){let r=300+x+2*y+0.1*x*x+0.1*x*y+0.1*Math.sqrt(Math.abs(x));
+    r+=(20*Math.sin(6*x*Math.PI)+20*Math.sin(2*x*Math.PI))*2/3;
+    r+=(20*Math.sin(x*Math.PI)+40*Math.sin(x/3*Math.PI))*2/3;
+    r+=(150*Math.sin(x/12*Math.PI)+300*Math.sin(x/30*Math.PI))*2/3;return r;}
+  const dLat0=tLat(lng-105,lat-35), dLng0=tLng(lng-105,lat-35);
+  const radLat=deg2rad(lat), magic=1-ee*Math.sin(radLat)*Math.sin(radLat), sm=Math.sqrt(magic);
+  const dLat=(dLat0*180)/((a*(1-ee))/(magic*sm)*Math.PI);
+  const dLng=(dLng0*180)/(a/sm*Math.cos(radLat)*Math.PI);
+  return [lng+dLng, lat+dLat];
+}
+
+/* 依据当前 ship（pos + heading=eul.yaw）在地图渲染自船 */
+function drawShip(){
+  const [lng,lat]=ship.pos;
+  // bubble:true：本船图元不吞点击，绘制静障碍/动目标时可在本船上方落点
+  const poly=shipPolygon(lng,lat,ship.len,ship.beam,ship.heading);
+  ship.overlay=new AMap.Polygon({path:poly,strokeColor:'#2dd4bf',fillColor:'#2dd4bf',fillOpacity:.5,strokeWeight:2,zIndex:80,bubble:true});
+  ship.overlay.setMap(map);
+  // 航向矢量：只用 eul.yaw，固定长度（不依赖 SOG/COG）
+  const tip=moveAlong(lng,lat,ship.heading,HEADING_VEC_LEN);
+  ship.arrow=new AMap.Polyline({path:[[lng,lat],tip],strokeColor:'#22c55e',strokeWeight:3,strokeStyle:'solid',
+    showDir:true,zIndex:79,bubble:true});
+  ship.arrow.setMap(map);
+  ship.label=new AMap.Text({text:`本船 HDG ${fmt(ship.heading,0)}°`,position:[lng,lat],offset:new AMap.Pixel(0,-28),bubble:true,
+    style:{background:'#06403a',color:'#7ff3e6',border:'1px solid #2dd4bf','border-radius':'5px',padding:'2px 6px','font-size':'11px'}});
+  ship.label.setMap(map);
+  drawRangeRings();   // 距离圆环随本船位置更新
+}
+function redrawShip(){
+  if(!ship) return;
+  [ship.overlay,ship.arrow,ship.label].forEach(v=>v&&map.remove(v));
+  drawShip();
+}
+
+/* ============================================================
+   本船轨迹：历史轨迹(loca/odometry 累积) + 局部轨迹(planning/trajectory 下发)
+   两者用统一颜色与样式（不区分），仅数据来源不同
+   ============================================================ */
+let histTrack=[];            // 历史轨迹点 [[lng,lat],...]（地图坐标）
+let histLine=null;           // 历史轨迹折线
+let localLine=null;          // 局部轨迹折线（规划路径）
+// 历史轨迹：累积一帧本船位置（去抖抽稀）
+function pushHistTrack(mlng,mlat){
+  if(!SHIP_TRACK.show) return;
+  const last=histTrack[histTrack.length-1];
+  if(last && distMeters(last[0],last[1],mlng,mlat)<SHIP_TRACK.minMoveM) return; // 移动太小忽略
+  histTrack.push([mlng,mlat]);
+  if(histTrack.length>SHIP_TRACK.histMax) histTrack.shift();
+  drawHistTrack();
+}
+function drawHistTrack(){
+  if(histLine){ map.remove(histLine); histLine=null; }
+  if(!SHIP_TRACK.show || histTrack.length<2) return;
+  // bubble:true 让点击穿透到地图（否则轨迹线会吞掉绘制时的点击，导致画不上静障碍/动目标）
+  histLine=new AMap.Polyline({path:histTrack,strokeColor:SHIP_TRACK.trackColor,
+    strokeWeight:3,strokeOpacity:.9,strokeStyle:'solid',lineJoin:'round',zIndex:64,bubble:true});
+  histLine.setMap(map);
+}
+// 局部轨迹：planning 下发的规划路径 pts=[[lng,lat],...]（地图坐标）
+function drawLocalTrack(pts){
+  if(localLine){ map.remove(localLine); localLine=null; }
+  if(!SHIP_TRACK.show || !pts || pts.length<2) return;
+  // 与历史轨迹统一颜色与样式（不区分），仅 zIndex 略低以叠在历史轨迹之下
+  localLine=new AMap.Polyline({path:pts,strokeColor:SHIP_TRACK.trackColor,
+    strokeWeight:3,strokeOpacity:.9,strokeStyle:'solid',lineJoin:'round',zIndex:63,bubble:true});
+  localLine.setMap(map);
+}
+function clearShipTracks(){
+  histTrack=[];
+  if(histLine){ map.remove(histLine); histLine=null; }
+  if(localLine){ map.remove(localLine); localLine=null; }
+}
+
+/* ---------- 距离圆环（以本船为圆心的多层同心圆）---------- */
+let rangeRingOverlays=[];   // 当前圆环覆盖物（圆+标注）
+function clearRangeRings(){
+  rangeRingOverlays.forEach(v=>map.remove(v));
+  rangeRingOverlays=[];
+}
+function drawRangeRings(){
+  clearRangeRings();
+  if(!RANGE_RINGS.show || !ship || !ship.pos) return;
+  const [lng,lat]=ship.pos, c=RANGE_RINGS.color;
+  RANGE_RINGS.radii.forEach(r=>{
+    // bubble:true 让点击穿透到地图（圆环覆盖面积大，否则会吞掉绘制时的点击）
+    const circle=new AMap.Circle({center:[lng,lat],radius:r,
+      strokeColor:c,strokeWeight:1.2,strokeOpacity:.7,strokeStyle:'dashed',
+      fillOpacity:0,zIndex:60,bubble:true});
+    circle.setMap(map); rangeRingOverlays.push(circle);
+    // 半径标注：置于圆的正北方向边缘
+    const labelPos=moveAlong(lng,lat,0,r);
+    const txt=new AMap.Text({text:r<1000?r+'m':(r/1000)+'km',position:labelPos,offset:new AMap.Pixel(0,0),bubble:true,
+      style:{background:'rgba(15,24,34,.85)',color:c,border:'1px solid '+c,'border-radius':'4px',
+        padding:'0 5px','font-size':'10px','line-height':'16px'}});
+    txt.setMap(map); rangeRingOverlays.push(txt);
+  });
+}
+
+/* ---------- 任务航路（航线 + 航路点标记）---------- */
+const ROUTE_COLOR='#a78bfa';   // 紫色航线，与目标/障碍/本船区分
+let routeOverlays=[];
+function clearRoute(){
+  routeOverlays.forEach(v=>map.remove(v));
+  routeOverlays=[];
+}
+// pts: [[lng,lat],...]（已为地图坐标 GCJ-02）
+function drawRoute(pts){
+  clearRoute();
+  if(!pts || pts.length<1) return;
+  // 航线（≥2 点才连线）
+  if(pts.length>=2){
+    const line=new AMap.Polyline({path:pts,strokeColor:ROUTE_COLOR,strokeWeight:3,
+      strokeOpacity:.9,strokeStyle:'solid',showDir:true,lineJoin:'round',zIndex:65});
+    line.setMap(map); routeOverlays.push(line);
+  }
+  // 逐个航路点：圆点 + 序号
+  pts.forEach((p,i)=>{
+    const dot=new AMap.CircleMarker({center:p,radius:5,fillColor:'#fff',fillOpacity:1,
+      strokeColor:ROUTE_COLOR,strokeWeight:2,zIndex:66});
+    dot.setMap(map); routeOverlays.push(dot);
+    const label=new AMap.Text({text:'WP'+(i+1),position:p,offset:new AMap.Pixel(0,-16),
+      style:{background:ROUTE_COLOR,color:'#fff',border:'none','border-radius':'4px',
+        padding:'0 4px','font-size':'10px','line-height':'15px'}});
+    label.setMap(map); routeOverlays.push(label);
+  });
+  // 点选航路点弹属性
+  const info=pts.map((p,i)=>[`WP${i+1}`,`(${fmt(p[0],6)}, ${fmt(p[1],6)})`]);
+  routeOverlays.forEach(ov=>ov.on && ov.on('click',()=>openInfo(propTable('任务航路 · '+pts.length+' 点', info), pts[0])));
+}
+
+/* ============================================================
+   动目标
+   ============================================================ */
+const TGT_COLOR='#0369a1';   // 深蓝（浅色底图也清晰）
+const ROUTE_TGT_COLOR='#0891b2';   // 路线跟随的预设路线颜色（青，区别于任务航路紫）
+let drawingTgt=false;
+
+function startTgtDraw(){
+  if(drawingTgt||draw||rectOrient)return;
+  drawingTgt=true;
+  // 切换当前归属对应的外形下拉显隐（场景=rectDims / 实时=rtRectDims）
+  const dimsId = newTgtOwner==='realtime' ? 'rtRectDims' : 'rectDims';
+  if($(dimsId)) $(dimsId).style.display = tgtMode==='rect'?'':'none';
+  if(tgtMode==='polygon'){
+    // 标点绘制：复用多边形绘制控制器，闭合后成多边形外形
+    startDraw('polygon', TGT_COLOR, coords=>finishPolyTgt(coords));
+  }else{
+    startRectTgt();   // 标矩形：对角拉框 + 旋转手柄
+  }
+}
+// 标点多边形闭合
+function finishPolyTgt(coords){
+  const center=centroid(coords);
+  // 运动模式按当前归属读取（场景=tMotion / 实时=rtMotion）
+  const routeMode = motionVal()==='route';
+  if(routeMode){
+    // 路线模式：朝向由路线决定，跳过手柄旋转直接生成（外形按 0° 原样）
+    drawingTgt=false; hideBanner(); map.setDefaultCursor(''); map.setStatus({dragEnable:true});
+    finishTgt({mode:'polygon',points:coords.slice()}, center, 0);
+    return;
+  }
+  // 直线模式：进入拖手柄旋转设朝向（初始 0°=船首朝北/上；顶点随旋转）
+  rectOrient={kind:'polygon', phase:'rotate', center, course:0, basePts:coords.slice(),
+    preview:null, handle:null, arrow:null, rotating:false};
+  map.setDefaultCursor('crosshair');
+  banner('拖动 <b>圆点手柄</b> 旋转设朝向');
+  $('bannerFinish').style.display='none';
+  $('bannerCancel').style.display='';
+  rectTgtDraw();
+}
+// 将 basePts 绕 center 旋转 courseDeg（0°朝北为基准，顺时针=方位角增大），返回旋转后顶点
+function rotatePolyPts(basePts, center, courseDeg){
+  const cy=deg2rad(courseDeg);
+  return basePts.map(p=>{
+    const east=(p[0]-center[0])*111320*Math.cos(deg2rad(center[1]));
+    const north=(p[1]-center[1])*111320;
+    // 顺时针旋转 course（0°=北，90°=东）
+    const e2 = east*Math.cos(cy) + north*Math.sin(cy);
+    const n2 = -east*Math.sin(cy) + north*Math.cos(cy);
+    return offsetMeters(center[0],center[1], e2, n2);
+  });
+}
+// 沿 course 纵向(forward)缩放 sF、横向(right)缩放 sR，绕 center 缩放多边形（形状不变，改变大小）
+function scalePolyLW(points, center, courseDeg, sF, sR){
+  const cy=deg2rad(courseDeg);
+  return points.map(p=>{
+    const east=(p[0]-center[0])*111320*Math.cos(deg2rad(center[1]));
+    const north=(p[1]-center[1])*111320;
+    // 投影到 航向(forward)/右舷(right) 轴
+    let forward= north*Math.cos(cy) + east*Math.sin(cy);
+    let right  = east*Math.cos(cy) - north*Math.sin(cy);
+    forward*=sF; right*=sR;                 // 各轴独立缩放
+    // 反投影回 东/北
+    const e2 = forward*Math.sin(cy) + right*Math.cos(cy);
+    const n2 = forward*Math.cos(cy) - right*Math.sin(cy);
+    return offsetMeters(center[0],center[1], e2, n2);
+  });
+}
+
+/* ============================================================
+   标矩形：① 对角拉框定长宽/中心 → ② 拖圆点手柄旋转调朝向
+   rectOrient={phase:'box'|'rotate', c0, center, L, W, course, preview, handle, arrow}
+   ============================================================ */
+let rectOrient=null;
+function startRectTgt(){
+  rectOrient={kind:'rect',phase:'box',c0:null,center:null,L:0,W:0,course:0,preview:null,handle:null,arrow:null};
+  map.setDefaultCursor('crosshair');
+  banner('单击地图放置矩形 <b>一角</b>（起点）');
+  $('bannerFinish').style.display='none';
+  $('bannerCancel').style.display='';
+}
+// 重绘外形预览 + 旋转手柄 + 航向箭头（矩形/多边形通用）
+function rectTgtDraw(){
+  const {center,course}=rectOrient;
+  let poly, armLen;
+  if(rectOrient.kind==='polygon'){
+    poly=rotatePolyPts(rectOrient.basePts, center, course);
+    // 手柄臂长按多边形半径估算
+    armLen=Math.max.apply(null, poly.map(p=>distMeters(center[0],center[1],p[0],p[1]))) + 12;
+  }else{
+    const {L,W}=rectOrient, hull=hullVal(), fn=hull==='capsule'?capsulePolygon:rectPolygon;
+    poly=fn(center[0],center[1],L,W,course);
+    armLen=L/2+12;
+  }
+  if(rectOrient.preview) map.remove(rectOrient.preview);
+  rectOrient.preview=new AMap.Polygon({path:poly,
+    strokeColor:TGT_COLOR,fillColor:TGT_COLOR,fillOpacity:.3,strokeWeight:2,strokeStyle:'dashed',zIndex:150});
+  rectOrient.preview.setMap(map);
+  // 航向矢量（从中心沿 course）
+  if(rectOrient.arrow) map.remove(rectOrient.arrow);
+  const tip=moveAlong(center[0],center[1],course,Math.max(armLen-12,25));
+  rectOrient.arrow=new AMap.Polyline({path:[center,tip],strokeColor:'#fff',strokeWeight:2,showDir:true,zIndex:151});
+  rectOrient.arrow.setMap(map);
+  // 旋转手柄：船首(course 方向)
+  const hpos=moveAlong(center[0],center[1],course,armLen);
+  if(rectOrient.handle) map.remove(rectOrient.handle);
+  rectOrient.handle=new AMap.CircleMarker({center:hpos,radius:7,fillColor:'#fff',fillOpacity:1,
+    strokeColor:TGT_COLOR,strokeWeight:2,cursor:'pointer',zIndex:152});
+  rectOrient.handle.setMap(map);
+  rectOrient.handle.on('mousedown',onHandleDown);
+}
+function onHandleDown(){
+  if(!rectOrient) return;
+  rectOrient.rotating=true;
+  map.setStatus({dragEnable:false});   // 旋转期间禁地图拖动
+  $('bannerTxt').innerHTML='拖动手柄旋转设 <b>朝向</b>';   // 只改文字，保持仅「取消」
+}
+function cleanupRectOrient(){
+  if(!rectOrient) return;
+  [rectOrient.preview,rectOrient.arrow,rectOrient.handle,rectOrient.boxPrev].forEach(v=>v&&map.remove(v));
+  rectOrient=null;
+  map.setDefaultCursor(''); map.setStatus({dragEnable:true}); hideBanner();
+  drawingTgt=false;
+  clearSegHighlight();   // 分段按钮高亮熄灭
+}
+
+function finishTgt(shape, position, courseArg){
+  drawingTgt=false;
+  // 绘制完成即生成；备注/MMSI/船类别/速度等在右侧列表「编辑」里改
+  // 航向：显式参数 > shape.course > 默认 0
+  const course=norm360(courseArg!=null ? courseArg : (shape.course!=null ? shape.course : 0));
+  // 多边形：记录创建时朝向作为基准，之后按 course 增量旋转外形（沿路线时朝向跟随切线）
+  if(shape.mode==='polygon' && shape.baseCourse==null) shape.baseCourse=course;
+  const t={
+    id:'T'+String(++tgtId).padStart(3,'0'),
+    mmsi:-1,          // AIS 唯一 id，默认 -1（编辑里改）
+    shiptype:0,       // AIS 船只类别，默认 0（编辑里改）
+    position,         // [lng,lat] = [lon,lat]
+    speed:3,          // 对地航速，默认 3 m/s（编辑里改）
+    course:course,    // 对地航向 course
+    yaw:course,       // 朝向 yaw 与 course 同值
+    motion:{mode:'straight'},   // 运动模式，默认直线匀速
+    origin:newTgtOwner,         // 归属：场景(scene) / 运行期实时(realtime)
+    shape, remark:''
+  };
+  drawTgt(t);
+  targets.push(t); renderTgtList();
+  if(t.origin==='scene') syncActiveScene();   // 场景动目标：回写激活场景
+  // 路线跟随：生成后立即进入画路线（场景/实时均支持，按当前归属的运动模式下拉）
+  if(motionVal()==='route'){
+    t.motion={mode:'route',points:[],onArrive:'stop',phase:'onRoute',seg:1,dir:1};
+    startRouteDraw(t);
+  }
+}
+// 为路线目标绘制路线：单击加点、双击完成折线（起点=目标位置，预览从目标位置起连）
+function startRouteDraw(t){
+  drawingTgt=true;
+  startDraw('line', ROUTE_TGT_COLOR, coords=>{ attachRoute(t,coords); }, t.position.slice());
+  $('bannerTxt').innerHTML='为 <b>'+esc(tgtDisplayName(t))+'</b> 画路线：单击加点，双击完成（起点=目标位置）';
+}
+function attachRoute(t,coords){
+  // 路线起点=动目标绘制起始位置，其后接绘制的各点
+  t.motion.points=[t.position.slice(), ...coords];
+  t.motion.phase='onRoute'; t.motion.seg=1; t.motion.dir=1;   // 已在起点，直接沿线
+  drawTgtRoute(t);
+  renderTgtList();
+  if(t.origin==='scene') syncActiveScene();
+}
+// 动目标显示名：有备注用备注，否则「(实时)动目标<序号>」（序号=同归属列表内位置）
+function tgtDisplayName(t){
+  const peers=targets.filter(x=>x.origin===t.origin);
+  return t.remark || ((t.origin==='realtime'?'实时目标':'动目标')+(peers.indexOf(t)+1));
+}
+
+function tgtPolyPts(t){
+  if(t.shape.mode==='rect'){
+    const fn=t.shape.hull==='capsule'?capsulePolygon:rectPolygon;
+    return fn(t.position[0],t.position[1],t.shape.L,t.shape.W,t.yaw);
+  }
+  // polygon: 平移到当前 position + 按 (course-baseCourse) 增量旋转（朝向跟随航向）
+  const c0=centroid(t.shape.points);
+  const dE=(t.position[0]-c0[0]), dN=(t.position[1]-c0[1]);
+  const moved=t.shape.points.map(p=>[p[0]+dE,p[1]+dN]);   // 先平移到 position
+  const delta=norm360(t.course-(t.shape.baseCourse!=null?t.shape.baseCourse:t.course));
+  if(delta===0) return moved;
+  return rotatePolyPts(moved, t.position, delta);           // 绕当前中心旋转增量角
+}
+function drawTgt(t, polyPts){
+  polyPts=polyPts||tgtPolyPts(t);
+  if(t.overlay)map.remove(t.overlay); if(t.arrow){map.remove(t.arrow);t.arrow=null;} if(t.label)map.remove(t.label);
+  t.overlay=new AMap.Polygon({path:polyPts,strokeColor:TGT_COLOR,fillColor:TGT_COLOR,fillOpacity:.32,strokeWeight:2,zIndex:70});
+  t.overlay.setMap(map);
+  // 航向矢量线：路线跟随模式不显示（朝向由路线决定，路线本身已示意方向）
+  if(!(t.motion && t.motion.mode==='route')){
+    const len=Math.max(30,t.speed*60);   // speed 为 m/s，60s 预测
+    const tip=moveAlong(t.position[0],t.position[1],t.course,len);
+    t.arrow=new AMap.Polyline({path:[t.position,tip],strokeColor:'#0369a1',strokeWeight:2.5,showDir:true,zIndex:69});
+    t.arrow.setMap(map);
+  }
+  // 悬浮标签：ID/备注 · 速度 · 航向 · 距本船（有本船定位时）
+  t.label=new AMap.Text({text:tgtLabelText(t),position:t.position,offset:new AMap.Pixel(0,-24),
+    style:{background:'#0b2a3d',color:'#bae6fd',border:'1px solid #0369a1','border-radius':'5px',padding:'2px 6px','font-size':'11px'}});
+  t.label.setMap(map);
+  // 点选覆盖物/标签 → 弹出动目标属性
+  bindInfo([t.overlay,t.label], ()=>targetInfoHtml(t), ()=>t.position);
+  // 路线跟随：重绘预设路线
+  if(t.motion && t.motion.mode==='route') drawTgtRoute(t);
+}
+// 绘制/重绘目标的预设路线（折线 + 起终点标记）
+function drawTgtRoute(t){
+  clearTgtRoute(t);
+  const pts=t.motion&&t.motion.points;
+  if(!pts||pts.length<2) return;
+  t.routeOverlay=[];
+  const line=new AMap.Polyline({path:pts,strokeColor:ROUTE_TGT_COLOR,strokeWeight:2,
+    strokeOpacity:.9,strokeStyle:'dashed',showDir:true,lineJoin:'round',zIndex:64});
+  line.setMap(map); t.routeOverlay.push(line);
+}
+function clearTgtRoute(t){
+  if(t.routeOverlay){ t.routeOverlay.forEach(v=>map.remove(v)); t.routeOverlay=null; }
+}
+// 动目标悬浮标签文本
+function tgtLabelText(t){
+  let txt=`${esc(tgtDisplayName(t))} · ${fmt(t.speed,1)}m/s · 航向 ${fmt(t.course,0)}°`;
+  if(ship && ship.pos){
+    const d=distMeters(ship.pos[0],ship.pos[1],t.position[0],t.position[1]);
+    txt += ` · 距本船 ${d<1000?fmt(d,0)+'m':fmt(d/1000,2)+'km'}`;
+  }
+  return txt;
+}
+// 本船位置更新后，仅刷新各动目标标签中的「距本船」（不重建整个覆盖物）
+function refreshTgtDistances(){
+  targets.forEach(t=>{ if(t.label) t.label.setText(tgtLabelText(t)); });
+}
+
+// 渲染两个动目标列表：场景(#tgtList) / 实时(#rtTgtList)
+function renderTgtList(){
+  renderTgtListInto('tgtList','tgtCount',targets.filter(t=>t.origin!=='realtime'),'scene');
+  renderTgtListInto('rtTgtList','rtTgtCount',targets.filter(t=>t.origin==='realtime'),'realtime');
+}
+function renderTgtListInto(listId,countId,arr,origin){
+  const el=$(listId); if(!el) return;
+  if($(countId)) $(countId).textContent=arr.length;
+  if(!arr.length){ el.innerHTML='<div class="empty">'+(origin==='realtime'?'暂无实时动目标':'暂无动目标')+'</div>'; return; }
+  el.innerHTML='';
+  arr.forEach(t=>{
+    const row=document.createElement('div');row.className='item';
+    const mmsiStr=(t.mmsi!=null&&t.mmsi!==-1)?` · MMSI ${t.mmsi}`:'';
+    const ob=origin==='realtime'?'<span class="lbadge realtime">实时</span>':'<span class="lbadge scene">场景</span>';
+    row.innerHTML=`<span class="swatch" style="background:${TGT_COLOR}"></span>
+      <div class="meta"><div class="t">${esc(tgtDisplayName(t))}${mmsiStr}${ob}</div>
+      <div class="s">${tgtListSub(t)}</div></div>`;
+    t._sEl=row.querySelector('.s');   // 存副行节点，供推演时实时更新航向
+    const f=mkBtn('定位','ghost mini',()=>map.setZoomAndCenter(15,t.position));
+    const e=mkBtn('编辑','sec mini',()=>editTgt(t));
+    const d=mkBtn('删','danger mini',()=>{
+      [t.overlay,t.arrow,t.label].forEach(v=>v&&map.remove(v));clearTgtRoute(t);
+      targets.splice(targets.indexOf(t),1);renderTgtList();
+      if(origin==='scene') syncActiveScene();
+    });
+    row.append(f,e,d); el.appendChild(row);
+    // 路线跟随：到达终点行为下拉（明显的界面按钮）
+    if(t.motion && t.motion.mode==='route'){
+      const arr2=document.createElement('div'); arr2.style.cssText='display:flex;align-items:center;gap:6px;margin:-2px 0 6px 2px';
+      const lbl=document.createElement('span'); lbl.className='hint'; lbl.style.margin='0'; lbl.textContent='到终点：';
+      const sel=document.createElement('select'); sel.style.cssText='flex:none;width:auto;padding:3px 6px;font-size:11px';
+      sel.innerHTML='<option value="stop">停止</option><option value="loop">循环</option><option value="pingpong">往返</option>';
+      sel.value=t.motion.pendingOnArrive||t.motion.onArrive||'stop';
+      sel.title='切换将在当前模式运行到终点后生效（避免中途重置航段导致错乱）';
+      sel.addEventListener('change',()=>{ setOnArrive(t, sel.value); });
+      arr2.append(lbl,sel); el.appendChild(arr2);
+    }
+    if(t.label) t.label.setText(tgtLabelText(t));   // 同步地图标签（删除重排后序号跟随）
+  });
+}
+// 列表副行文本（外形 · 航向 · 速度）
+function tgtListSub(t){
+  const shp=t.shape.mode==='rect'?`${t.shape.hull==='capsule'?'胶囊':'矩形'} ${t.shape.L}×${t.shape.W}m`:('多边形 '+t.shape.points.length+'点');
+  return `${shp} · 航向 ${fmt(t.course,0)}° · ${fmt(t.speed,1)}m/s`;
+}
+// 推演中实时刷新列表里各行的航向/速度（不重建整表）
+function refreshTgtListLive(){
+  targets.forEach(t=>{ if(t._sEl) t._sEl.textContent=tgtListSub(t); });
+}
+function editTgt(t){
+  const course=prompt('航向 course (°)：',t.course); if(course==null)return;
+  t.course=norm360(+course);
+  t.yaw=t.course;                      // 朝向 yaw 与 course 同值（网页端只提供一个航向值）
+  const sp=prompt('速度 (m/s)：',t.speed); if(sp!=null) t.speed=+sp;
+  // 矩形目标：可改长/宽/外形，重新生成矩形/胶囊
+  if(t.shape.mode==='rect'){
+    const L=prompt('长 L (m)：',t.shape.L); if(L!=null) t.shape.L=Math.max(+L,1);
+    const W=prompt('宽 W (m)：',t.shape.W); if(W!=null) t.shape.W=Math.max(+W,1);
+    const hull=prompt('外形（rect 矩形 / capsule 胶囊）：',t.shape.hull); if(hull==='rect'||hull==='capsule') t.shape.hull=hull;
+  }else if(t.shape.mode==='polygon'){
+    // 多边形：按包围盒长宽整体缩放（形状不变）
+    const cur=polyBBoxLW(t.shape.points, t.position, t.course);
+    const L=prompt('长 L (m，沿航向)：',Math.round(cur.L)); if(L===null) { /*跳过*/ }
+    const W=prompt('宽 W (m，垂直航向)：',Math.round(cur.W)); if(W===null) { }
+    const newL=(L!=null&&L!=='')?Math.max(+L,1):cur.L, newW=(W!=null&&W!=='')?Math.max(+W,1):cur.W;
+    if(cur.L>0&&cur.W>0) t.shape.points=scalePolyLW(t.shape.points, t.position, t.course, newL/cur.L, newW/cur.W);
+  }
+  const mmsi=prompt('MMSI（唯一id，默认-1）：',t.mmsi==null?-1:t.mmsi); if(mmsi!=null) t.mmsi=parseInt(mmsi,10);
+  const stype=prompt('船类别（AIS）：',t.shiptype==null?0:t.shiptype); if(stype!=null) t.shiptype=parseInt(stype,10)||0;
+  // 路线跟随：到达终点行为在列表下拉里改；这里仅提供重画路线
+  if(t.motion && t.motion.mode==='route'){
+    if(confirm('是否重画路线？确定=重画，取消=保留')){ clearTgtRoute(t); startRouteDraw(t); return; }
+  }
+  const rm=prompt('备注：',t.remark); if(rm!=null) t.remark=rm;
+  drawTgt(t); renderTgtList();
+  if(t.origin==='scene') syncActiveScene();
+}
+
+/* ---------- 推演（简单动力学）---------- */
+let playing=false,timer=null,simEpoch=0;
+let runBaseline=null;   // 首次开始推演时的场景动目标位置/航向快照（供「结束」复位）
+// 快照当前场景动目标（id→{position,course,yaw,motion}）以便结束时复位
+function captureRunBaseline(){
+  runBaseline={};
+  targets.filter(t=>t.origin==='scene').forEach(t=>{
+    runBaseline[t.id]={position:t.position.slice(),course:t.course,yaw:t.yaw,
+      motion:t.motion?JSON.parse(JSON.stringify(t.motion)):{mode:'straight'}};
+  });
+}
+// 播放按钮文案：未开始=开始 / 运行中=暂停 / 已开始且暂停=继续
+function updatePlayBtnLabel(){
+  $('playBtn').textContent = playing ? '⏸ 暂停' : (simStarted ? '▶ 继续' : '▶ 开始');
+}
+$('playBtn').addEventListener('click',()=>{
+  if(!simStarted) captureRunBaseline();     // 第一次开始推演：记录复位基线
+  playing=!playing;
+  simStarted=true; updatePlayBtnLabel(); updateRealtimeGate();   // 推演已开始；据暂停/运行门控实时页
+  if(!playing) updateRealtimeGate();
+  if(playing){
+    simEpoch = ship&&ship.time&&!isNaN(new Date(ship.time))?new Date(ship.time).getTime():Date.now();
+    // 开始推演：打印下发上下文 + 首帧静障碍/动目标各一次（verbose）
+    console.log('[MQTT] ▶ 开始推演 · 下发上下文：',
+      {broker:MQTT_CONFIG.url, 船号:currentShipNum, 下发主题:subTopic(currentShipNum),
+       已连接:!!(mqttClient&&mqttClient.connected),
+       场景静障碍数:obstacles.length, 动目标数:targets.length});
+    if(pubReady()){
+      const no=publishStaticObstacles(true), nt=publishDynamicTargets(true);
+      console.log(`[MQTT] 首帧下发完成：静障碍×${no} 动目标×${nt}`);
+      if(no===0 && nt===0) console.warn('[MQTT] ⚠️ 静障碍与动目标都为 0 —— 请确认已「选中/进入」含数据的场景，或已在当前场景绘制过目标。');
+    }else{
+      console.warn('[MQTT] 未连接/未选船号，无法下发；仅本地推演');
+    }
+    timer=setInterval(step,SIM_STEP_MS);
+  } else clearInterval(timer);
+});
+/* 路线跟随推进：先直线驶向路线首点(toStart)，再沿折线走(onRoute)，朝向=航段切线 */
+function advanceRoute(t, dist){
+  const m=t.motion, pts=m.points;
+  if(!pts || pts.length<2){ // 路线无效则退化为直线
+    t.position=moveAlong(t.position[0],t.position[1],t.course,dist); return;
+  }
+  if(m.phase==='done') return;   // 停止：不再移动
+  // 阶段一：驶向路线起点
+  if(m.phase==='toStart'){
+    const start=pts[0];
+    const d=distMeters(t.position[0],t.position[1],start[0],start[1]);
+    t.course=norm360(bearingDeg(t.position[0],t.position[1],start[0],start[1])); t.yaw=t.course;
+    if(d<=dist){ t.position=start.slice(); m.phase='onRoute'; m.seg=1; m.dir=1; dist-=d; }
+    else { t.position=moveAlong(t.position[0],t.position[1],t.course,dist); return; }
+  }
+  // 阶段二：沿折线推进 dist（m.seg=正在前往的顶点索引，m.dir=方向）
+  let guard=pts.length*4;   // 防跨多段死循环
+  while(dist>1e-6 && guard-- > 0){
+    const to=pts[m.seg];
+    if(!to){ if(!arriveEnd(t)) return; continue; }   // 越界=到达一端
+    const segLeft=distMeters(t.position[0],t.position[1],to[0],to[1]);
+    t.course=norm360(bearingDeg(t.position[0],t.position[1],to[0],to[1])); t.yaw=t.course;
+    if(dist<segLeft){
+      t.position=moveAlong(t.position[0],t.position[1],t.course,dist); dist=0;
+    }else{
+      t.position=to.slice(); dist-=segLeft;
+      m.seg += m.dir;                                 // 前往下一个顶点
+      if(m.seg>=pts.length || m.seg<0){ if(!arriveEnd(t)) return; }
+    }
+  }
+}
+// 到达一端的行为处理；返回 true=继续走、false=停下
+function arriveEnd(t){
+  const m=t.motion, pts=m.points, n=pts.length;
+  if(m.dir>0 && m.seg>=n){        // 到达终点(正向)
+    // 运行到终点：此刻才应用挂起的「到终点行为」切换（避免中途重置航段导致错乱）
+    if(m.pendingOnArrive!=null){ m.onArrive=m.pendingOnArrive; m.pendingOnArrive=null; }
+    if(m.onArrive==='loop'){ t.position=pts[0].slice(); m.seg=1; return true; }
+    if(m.onArrive==='pingpong'){ m.dir=-1; m.seg=n-2; return true; }
+    t.position=pts[n-1].slice(); m.phase='done'; return false;   // stop
+  }
+  if(m.dir<0 && m.seg<0){         // 往返回到起点
+    m.dir=1; m.seg=1; return true;
+  }
+  return true;
+}
+/* 切换路线目标的「到终点行为」：
+   - 运行中：仅记录挂起值，待当前模式运行到终点再生效（不重置航段/方向，避免错乱）
+   - 已在终点停止(phase==='done')：立即以新模式从终点继续 */
+function setOnArrive(t, val){
+  const m=t.motion; if(!m || m.mode!=='route') return;
+  const pts=m.points||[], n=pts.length, cur=m.onArrive||'stop';
+  if(m.phase==='done'){
+    m.onArrive=val; m.pendingOnArrive=null;
+    if(val==='loop'){ if(n>=1) t.position=pts[0].slice(); m.seg=1; m.dir=1; m.phase='onRoute'; }
+    else if(val==='pingpong'){ m.dir=-1; m.seg=Math.max(n-2,0); m.phase='onRoute'; }
+    // val==='stop'：保持停在终点，无需动作
+    drawTgt(t);
+  }else{
+    // 运行中：与当前生效值一致则撤销挂起，否则记录挂起，待到终点生效
+    m.pendingOnArrive = (val===cur) ? null : val;
+  }
+}
+function step(){
+  const dt=SIM_STEP_MS/1000; // s，与下发间隔一致（10Hz → 0.1s）
+  // 自船位置由船端 MQTT 实时下发，推演仅外推动目标
+  targets.forEach(t=>{
+    const dist=t.speed*dt;   // speed 为 m/s
+    if(t.motion && t.motion.mode==='route') advanceRoute(t, dist);
+    else t.position=moveAlong(t.position[0],t.position[1],t.course,dist);   // 直线匀速
+    drawTgt(t);
+  });
+  refreshTgtListLive();   // 列表航向/速度随运行更新
+  // 每步下发更新后的动目标（模拟实时流）
+  publishDynamicTargets();
+  // 静障碍无变化期间兜底重发（默认每 10s 一次）
+  maybeRepublishObstacles();
+  simEpoch+=dt*1000;
+  const d=new Date(simEpoch);
+  $('clkTime').textContent=d.toISOString().substr(11,8);
+  $('clkTs').textContent=d.toISOString();
+}
+
+/* ============================================================
+   场景导入/导出/清空
+   ============================================================ */
+/* ============================================================
+   船端下发消息映射（暂不下发，仅完善参数结构；后续对接 MQTT publish 复用）
+   —— 与 planning 系统 pub_dynamic_target / pub_static_obstacle 参数一致
+   ============================================================ */
+// 动目标 → AIS (dynamic/target)
+// 多边形沿 course 方向的定向包围盒 → {L(纵向,沿航向),W(横向)}
+function polyBBoxLW(points, center, courseDeg){
+  const cy=deg2rad(courseDeg);
+  let minF=Infinity,maxF=-Infinity,minR=Infinity,maxR=-Infinity;
+  points.forEach(p=>{
+    // 相对中心的东/北偏移(米)
+    const east=(p[0]-center[0])*111320*Math.cos(deg2rad(center[1]));
+    const north=(p[1]-center[1])*111320;
+    // 投影到 航向(forward)/右舷(right) 轴
+    const forward= north*Math.cos(cy) + east*Math.sin(cy);
+    const right  = east*Math.cos(cy) - north*Math.sin(cy);
+    minF=Math.min(minF,forward); maxF=Math.max(maxF,forward);
+    minR=Math.min(minR,right);   maxR=Math.max(maxR,right);
+  });
+  return {L:Math.max(maxF-minF,0), W:Math.max(maxR-minR,0)};
+}
+function targetToAis(t){
+  const course=norm360(t.course);
+  // 尺寸：矩形取 L×W；多边形取定向包围盒
+  let L=0,W=0;
+  if(t.shape&&t.shape.mode==='rect'){ L=+t.shape.L; W=+t.shape.W; }
+  else if(t.shape&&t.shape.mode==='polygon'){ const b=polyBBoxLW(t.shape.points,t.position,course); L=b.L; W=b.W; }
+  const [lon,lat]=toShipCoord(t.position[0],t.position[1]);  // 坐标钩子
+  return {
+    mmsi: (t.mmsi==null?-1:t.mmsi),          // 目标唯一 id，默认 -1
+    speed: t.speed,                          // 对地航速，单位 m/s
+    lon: lon,                                // 目标经度
+    lat: lat,                                // 目标纬度
+    course: course,                          // 对地航向（目标运动方向）
+    heading: course,                         // 真航向（船首朝向 yaw）；船端约定与 course 同值
+    shiptype: (t.shiptype==null?0:t.shiptype), // 船只类别，AIS 类别编号
+    to_bow: L/2,                             // 船中心→船艏 纵向半长
+    to_stern: L/2,                           // 船中心→船尾 纵向半长
+    to_port: W/2,                            // 船中心→左舷 横向半宽
+    to_starboard: W/2                        // 船中心→右舷 横向半宽
+  };
+}
+/* 静障碍 → 扁平几何数组 (static/obstacle)，按船端类型判定规则编码：
+   点 : 仅 1 个经纬度对（扁平长度 2）
+   线 : 点数 ≥ 3 且首尾不同（不闭合）
+   面 : 点数 ≥ 3 且首尾相同（闭合）
+   —— 对退化情形做规整：
+      · 2 点的线：插入中点凑到 3 点（保持几何不变，满足「线≥3点」）
+      · 面：若未闭合则追加首点闭合 */
+// 返回“点对数组” [[lng,lat],...]（船端 _dict_to_obstacles 自行展平，无需我方展平/包 data）
+function obstacleToPointArray(o){
+  let pts=o.coords.map(p=>toShipCoord(p[0],p[1]));   // 坐标钩子（默认透传 GCJ-02）
+  if(o.type==='point'){
+    pts=[pts[0]];                                     // 仅取 1 个点
+  }else if(o.type==='line'){
+    if(pts.length<3){
+      // 2 点线：在两点间插入中点，凑够 ≥3 点且首尾不同
+      const a=pts[0], b=pts[pts.length-1];
+      pts=[a, [(a[0]+b[0])/2,(a[1]+b[1])/2], b];
+    }
+    // 确保不闭合：若首尾相同，微调不可取——线本就不应闭合，编辑态保证首尾不同
+  }else{ // polygon 面
+    const first=pts[0], last=pts[pts.length-1];
+    if(first[0]!==last[0]||first[1]!==last[1]) pts=pts.concat([[first[0],first[1]]]); // 追加首点闭合
+  }
+  return pts;   // [[lng,lat],[lng,lat],...]
+}
+function obstaclesToShipMsg(){
+  // 船端 _dict_to_obstacles 从 data['obstacles'] 取，每个障碍为点对序列 [[lng,lat],...]
+  const arr=obstacles.map(obstacleToPointArray);
+  return {
+    obstacles: arr,                                  // 键名须为 obstacles（复数）
+    obstacle_num: arr.length,                        // 静障碍数量
+    obstacle_point_nums: arr.map(a=>a.length)        // 每个静障碍点数（点对个数）
+  };
+}
+
+/* 下发坐标转换钩子：网页 GCJ-02 → 船端（默认直接透传；若需 WGS-84 打开开关） */
+function toShipCoord(lng,lat){
+  return USE_GCJ02_TO_WGS84_ON_PUB ? gcj02ToWgs84(lng,lat) : [lng,lat];
+}
+// GCJ-02 → WGS-84 近似逆算法（与 wgs84ToGcj02 互逆）
+function gcj02ToWgs84(lng,lat){
+  const a=6378245.0, ee=0.00669342162296594323;
+  function tLat(x,y){let r=-100+2*x+3*y+0.2*y*y+0.1*x*y+0.2*Math.sqrt(Math.abs(x));
+    r+=(20*Math.sin(6*x*Math.PI)+20*Math.sin(2*x*Math.PI))*2/3;
+    r+=(20*Math.sin(y*Math.PI)+40*Math.sin(y/3*Math.PI))*2/3;
+    r+=(160*Math.sin(y/12*Math.PI)+320*Math.sin(y*Math.PI/30))*2/3;return r;}
+  function tLng(x,y){let r=300+x+2*y+0.1*x*x+0.1*x*y+0.1*Math.sqrt(Math.abs(x));
+    r+=(20*Math.sin(6*x*Math.PI)+20*Math.sin(2*x*Math.PI))*2/3;
+    r+=(20*Math.sin(x*Math.PI)+40*Math.sin(x/3*Math.PI))*2/3;
+    r+=(150*Math.sin(x/12*Math.PI)+300*Math.sin(x/30*Math.PI))*2/3;return r;}
+  const dLat0=tLat(lng-105,lat-35), dLng0=tLng(lng-105,lat-35);
+  const radLat=deg2rad(lat), magic=1-ee*Math.sin(radLat)*Math.sin(radLat), sm=Math.sqrt(magic);
+  const dLat=(dLat0*180)/((a*(1-ee))/(magic*sm)*Math.PI);
+  const dLng=(dLng0*180)/(a/sm*Math.cos(radLat)*Math.PI);
+  return [lng-dLng, lat-dLat]; // 逆向：减去偏移
+}
+
+/* 生成 MQTT 消息 header（stamp + frame_id） */
+function makeHeader(frameId='map'){
+  const now=Date.now(), sec=Math.floor(now/1000), nanosec=(now%1000)*1e6;
+  return {stamp:{sec,nanosec},frame_id:frameId};
+}
+
+/* ============================================================
+   下发（发布）到船端
+   —— dynamic/target：每个目标一条 AIS 消息（对齐 pub_dynamic_target）
+   —— static/obstacle：全部障碍打包一条（对齐 pub_static_obstacle）
+   ============================================================ */
+/* 下发诊断开关：true 时每帧动目标下发也打印（量大，排查完可关）；
+   静障碍下发、开始推演首帧、pubReady 失败 无论如何都打印 */
+let PUB_DEBUG = true;
+let _lastDynLog=0;   // 每帧动目标下发日志的 1s 节流时间戳
+function pubReady(){
+  const hasClient=!!mqttClient, connected=!!(mqttClient&&mqttClient.connected), hasShip=currentShipNum!=null;
+  const ok = hasClient && connected && hasShip;
+  if(!ok) console.warn('[MQTT] pubReady=false → 不下发。原因：',
+    {有客户端:hasClient, 已连接:connected, 已选船号:hasShip, currentShipNum});
+  return ok;
+}
+// 下发所有动目标（逐条）→ emulator_interaction_sub_<ship_num>
+// 信封结构：{type:'dynamic_target', data:{...AIS 字段+header...}}
+function publishDynamicTargets(verbose){
+  if(!pubReady()) return 0;
+  const topic=subTopic(currentShipNum);   // 下发主题
+  let n=0, bytes=0, firstEnv=null;
+  targets.forEach(t=>{
+    const data=Object.assign({header:makeHeader()}, targetToAis(t));
+    const env={type:PAYLOAD_TYPE.DYNAMIC_TARGET, data};
+    const s=JSON.stringify(env);
+    try{ mqttClient.publish(topic, s, {qos:0}); }
+    catch(err){ console.error('[MQTT] publish 动目标失败：', err); return; }
+    if(!firstEnv) firstEnv=s;
+    bytes+=s.length; n++;
+  });
+  // verbose=开始首帧强制打印；PUB_DEBUG 下的每帧下发按 1s 节流打印，避免刷屏
+  if(verbose || (PUB_DEBUG && Date.now()-_lastDynLog>=1000)){
+    _lastDynLog=Date.now();
+    if(n===0) console.warn('[MQTT] 动目标下发：targets 为空（当前未选中/进入含动目标的场景？）→ 0 条，topic='+topic);
+    else console.log(`[MQTT] 动目标下发 → topic=${topic} · ${n} 条 · ${bytes} 字节 · 首条示例:`, firstEnv);
+  }
+  return n;
+}
+// 下发全部静障碍（一条）；记录最近下发时刻用于兜底重发
+let lastObsPubTime=0;
+function publishStaticObstacles(verbose){
+  if(!pubReady()) return 0;
+  const topic=subTopic(currentShipNum);
+  const data=Object.assign({header:makeHeader()}, obstaclesToShipMsg());
+  const env={type:PAYLOAD_TYPE.STATIC_OBSTACLE, data};
+  const s=JSON.stringify(env);
+  try{ mqttClient.publish(topic, s, {qos:0}); }   // 下发主题
+  catch(err){ console.error('[MQTT] publish 静障碍失败：', err); return 0; }
+  lastObsPubTime=Date.now();
+  if(verbose || PUB_DEBUG){
+    if(data.obstacle_num===0) console.warn('[MQTT] 静障碍下发：obstacles 为空 → obstacle_num=0，topic='+topic);
+    else console.log(`[MQTT] 静障碍下发 → topic=${topic} · ${data.obstacle_num} 个 · 各点数=[${data.obstacle_point_nums}] · ${s.length} 字节`);
+  }
+  return data.obstacle_num;
+}
+// 静障碍兜底重发：距上次下发超过间隔则重发一次（无变化期间按固定帧率保活）
+function maybeRepublishObstacles(){
+  if(!pubReady()) return;
+  if(Date.now()-lastObsPubTime >= STATIC_OBSTACLE_REPUB_MS) publishStaticObstacles();
+}
+// 静障碍发生增删/导入/清空时：推演中立即重发（重置兜底计时）
+function onObstaclesChanged(){
+  if(playing && pubReady()) publishStaticObstacles();
+}
+
+/* 当前运行配置：动目标下发频率(Hz) / 静障碍下发频率(Hz) / 距离圆环 */
+function currentRunConfig(){
+  return {
+    tgtRateHz:+(1000/SIM_STEP_MS).toFixed(3),
+    obsRateHz:+(1000/STATIC_OBSTACLE_REPUB_MS).toFixed(4),
+    rings:{show:RANGE_RINGS.show, radii:RANGE_RINGS.radii.slice()}
+  };
+}
+/* 应用运行配置（加载场景/导入时回填生效）*/
+function applyRunConfig(rc){
+  if(!rc) return;
+  if(rc.tgtRateHz>0){ SIM_STEP_MS=Math.max(10,Math.round(1000/rc.tgtRateHz));
+    if(playing){ clearInterval(timer); timer=setInterval(step,SIM_STEP_MS); } }
+  if(rc.obsRateHz>0){ STATIC_OBSTACLE_REPUB_MS=Math.max(100,Math.round(1000/rc.obsRateHz)); }
+  if(rc.rings){
+    if(Array.isArray(rc.rings.radii)&&rc.rings.radii.length) RANGE_RINGS.radii=rc.rings.radii.slice();
+    RANGE_RINGS.show=!!rc.rings.show;
+    if($('ringRadii')) $('ringRadii').value=RANGE_RINGS.radii.join(',');
+    if($('toggleRingsBtn')) $('toggleRingsBtn').textContent='距离圆环：'+(RANGE_RINGS.show?'开':'关');
+    if(RANGE_RINGS.show) drawRangeRings(); else clearRangeRings();
+  }
+}
+function buildObsOverlays(type,coords,remark,color){
+  const c=color||OBS_COLOR,ovs=[];
+  if(type==='point'){
+    const m=new AMap.CircleMarker({center:coords[0],radius:6,strokeColor:c,strokeWeight:2,fillColor:c,fillOpacity:.95,zIndex:90});
+    m.setMap(map); ovs.push(m);
+    const t=new AMap.Text({text:remark||'点障碍',position:coords[0],offset:new AMap.Pixel(0,-18),
+      style:lblStyle(c)});
+    t.setMap(map); ovs.push(t);
+  }else if(type==='line'){
+    const l=new AMap.Polyline({path:coords,strokeColor:c,strokeWeight:2,strokeOpacity:.9});l.setMap(map);ovs.push(l);
+    const t=new AMap.Text({text:remark||'',position:coords[0],style:lblStyle(c)});t.setMap(map);ovs.push(t);
+  }else{
+    const p=new AMap.Polygon({path:coords,strokeColor:c,fillColor:c,fillOpacity:.22,strokeWeight:2});p.setMap(map);ovs.push(p);
+    const t=new AMap.Text({text:remark||'',position:centroid(coords),style:lblStyle(c)});t.setMap(map);ovs.push(t);
+  }
+  return ovs;
+}
+function lblStyle(c){return{background:c,color:'#1a1206',border:'none','border-radius':'4px',padding:'1px 5px','font-size':'11px'};}
+
+// 全清（logout 用）：清地图上全部对象（共用+场景+实时）与本船
+function clearAll(){
+  obstacles.forEach(o=>o.overlays.forEach(v=>map.remove(v))); obstacles.length=0;
+  targets.forEach(t=>{[t.overlay,t.arrow,t.label].forEach(v=>v&&map.remove(v));clearTgtRoute(t);}); targets.length=0;
+  if(ship){[ship.overlay,ship.arrow,ship.label].forEach(v=>v&&map.remove(v)); ship=null;}
+  clearRangeRings();
+  clearRoute();
+  clearShipTracks();
+  renderObsList(); renderTgtList();
+}
+// 仅清「当前场景」的静障碍(scene)+场景动目标(scene) —— 保留共用静障碍(shared)与实时动目标(realtime)
+function clearSceneItems(){
+  for(let i=obstacles.length-1;i>=0;i--) if(obstacles[i].origin==='scene'){ obstacles[i].overlays.forEach(v=>map.remove(v)); obstacles.splice(i,1); }
+  for(let i=targets.length-1;i>=0;i--) if(targets[i].origin!=='realtime'){ const t=targets[i]; [t.overlay,t.arrow,t.label].forEach(v=>v&&map.remove(v)); clearTgtRoute(t); targets.splice(i,1); }
+  renderObsList(); renderTgtList();
+}
+
+/* ============================================================
+   ① 共用静障碍：直接绘制、跨场景常驻、localStorage 持久化
+   —— 下发不区分共用/场景，全部静障碍打一包
+   ============================================================ */
+function persistShared(){
+  try{
+    const arr=obstacles.filter(o=>o.origin==='shared').map(o=>({type:o.type,coords:o.coords,remark:o.remark}));
+    localStorage.setItem(LS_SHARED, JSON.stringify(arr));
+  }catch(e){}
+}
+function loadShared(){
+  let arr=null;
+  try{ arr=JSON.parse(localStorage.getItem(LS_SHARED)||'null'); }catch(e){}
+  if(!Array.isArray(arr)) return;
+  arr.forEach(it=>{
+    if(!it||!it.type||!Array.isArray(it.coords)) return;
+    const overlays=buildObsOverlays(it.type,it.coords,it.remark,SHARED_OBS_COLOR);
+    const o={id:++obsId,type:it.type,coords:it.coords,remark:it.remark||'',origin:'shared',overlays};
+    obstacles.push(o); attachObsInfo(o);
+  });
+  renderObsList();
+}
+// 共用静障碍 导入/导出/清空
+$('exportSharedBtn').addEventListener('click',()=>{
+  const arr=obstacles.filter(o=>o.origin==='shared').map(o=>({type:o.type,coordinates:o.coords,remark:o.remark}));
+  downloadJSON({meta:{crs:'GCJ-02',kind:'shared-obstacles',generated:new Date().toISOString()},obstacles:arr},'usv-shared-obstacles.json');
+});
+$('importSharedBtn').addEventListener('click',()=>$('sharedFileInput').click());
+$('sharedFileInput').addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f)return;
+  const r=new FileReader();
+  r.onload=()=>{ try{ importShared(JSON.parse(r.result)); }catch(err){ alert('解析失败：'+err.message); } };
+  r.readAsText(f); e.target.value='';
+});
+function importShared(d){
+  (d.obstacles||[]).forEach(o=>{
+    const type=o.type, coords=o.coordinates||o.coords;
+    if(!type||!Array.isArray(coords)) return;
+    const overlays=buildObsOverlays(type,coords,o.remark,SHARED_OBS_COLOR);
+    const obj={id:++obsId,type,coords,remark:o.remark||'',origin:'shared',overlays};
+    obstacles.push(obj); attachObsInfo(obj);
+  });
+  renderObsList(); persistShared(); onObstaclesChanged();
+}
+$('clearSharedBtn').addEventListener('click',()=>{
+  if(!confirm('清空全部共用静障碍？')) return;
+  obstacles.filter(o=>o.origin==='shared').forEach(o=>o.overlays.forEach(v=>map.remove(v)));
+  for(let i=obstacles.length-1;i>=0;i--) if(obstacles[i].origin==='shared') obstacles.splice(i,1);
+  renderObsList(); persistShared(); onObstaclesChanged();
+});
+
+/* ============================================================
+   ② 场景集合：新建 / 切换 / 重命名 / 删除 / 导入 / 导出（localStorage 持久化）
+   —— 场景 = {id,name,obstacles,targets,runConfig}；共用静障碍不入场景
+   ============================================================ */
+// 把当前地图上的「场景」项（scene 静障碍 + 全部非实时动目标）快照回写到激活场景对象
+function syncActiveScene(){
+  const sc=scenes.find(s=>s.id===activeSceneId);
+  if(!sc) return;
+  sc.obstacles=obstacles.filter(o=>o.origin==='scene')
+    .map(o=>({id:o.id,type:o.type,coordinates:o.coords,remark:o.remark}));
+  sc.targets=targets.filter(t=>t.origin!=='realtime')
+    .map(t=>({id:t.id,mmsi:t.mmsi,shiptype:t.shiptype,position:t.position,speed:t.speed,
+      course:t.course,yaw:t.yaw,shape:t.shape,motion:t.motion,remark:t.remark}));
+  sc.runConfig=currentRunConfig();
+  persistScenes();
+}
+function persistScenes(){
+  try{ localStorage.setItem(LS_SCENES, JSON.stringify({selectedSceneId,sceneSeq,scenes})); }catch(e){}
+}
+function loadScenesFromStore(){
+  let obj=null;
+  try{ obj=JSON.parse(localStorage.getItem(LS_SCENES)||'null'); }catch(e){}
+  if(obj && Array.isArray(obj.scenes)){
+    scenes.length=0; obj.scenes.forEach(s=>scenes.push(s));
+    sceneSeq=obj.sceneSeq||scenes.reduce((m,s)=>Math.max(m,s.id||0),0);
+    selectedSceneId=(obj.selectedSceneId!=null && scenes.some(s=>s.id===obj.selectedSceneId))?obj.selectedSceneId:null;
+  }
+  // 启动停在场景列表；若上次有选中场景则在地图上恢复显示，否则不显示场景数据
+  activeSceneId=selectedSceneId;
+  renderSceneSelect();
+  if(selectedSceneId!=null) applySceneToMap(scenes.find(s=>s.id===selectedSceneId), false);
+}
+// 渲染场景列表（每行一个场景，底部虚线「新建场景」）
+function renderSceneSelect(){
+  const grid=$('sceneGrid'); if(!grid) return;
+  grid.innerHTML='';
+  scenes.forEach(sc=>{
+    const card=document.createElement('div'); card.className='scene-card'+(sc.id===selectedSceneId?' active':'');
+    const nObs=(sc.obstacles||[]).length, nTgt=(sc.targets||[]).length;
+    const sel=sc.id===selectedSceneId;
+    const info=document.createElement('div'); info.className='sc-info';
+    info.innerHTML=`<div class="sc-name">${esc(sc.name)}${sel?' <span class="sc-selflag">已选中</span>':''}</div>
+      <div class="sc-meta">静障碍 ${nObs} · 动目标 ${nTgt}</div>`;
+    const ops=document.createElement('div'); ops.className='sc-ops';
+    const editB=mkBtn('编辑','sec mini',()=>enterScene(sc.id));
+    const renB=mkBtn('重命名','ghost mini',()=>renameSceneById(sc.id));
+    const delB=mkBtn('删','danger mini',()=>deleteSceneById(sc.id));
+    ops.append(editB,renB,delB);
+    card.append(info,ops);
+    // 点卡片本体（非操作按钮）= 选中该场景用于仿真（地图同步显示），再次点取消
+    card.addEventListener('click',e=>{ if(!e.target.closest('.sc-ops')) toggleSelectScene(sc.id); });
+    grid.appendChild(card);
+  });
+  // 底部虚线「新建场景」
+  const add=document.createElement('div'); add.className='scene-add';
+  add.innerHTML='<span class="plus">＋</span><span class="txt">新建场景</span>';
+  add.addEventListener('click',addScene);
+  grid.appendChild(add);
+}
+// 选中/取消选中场景用于仿真：地图同步显示该场景静障碍+动目标（单选，再次点取消）
+function toggleSelectScene(id){
+  syncActiveScene();          // 先保存当前地图上场景的改动
+  if(selectedSceneId===id){
+    // 取消选中：清掉地图上的场景层
+    clearSceneItems(); selectedSceneId=null; activeSceneId=null;
+  }else{
+    // 选中新场景：载入其数据（applySceneToMap 内部会先 clearSceneItems 清旧场景）
+    selectedSceneId=id; activeSceneId=id;
+    applySceneToMap(scenes.find(s=>s.id===id), true);
+  }
+  persistScenes(); renderSceneSelect();
+}
+// 场景列表视图 ↔ 场景内部编辑视图
+// 退出编辑回到列表：自动保存快照；保持「选中」的场景仍显示，未选中的则从地图移除
+function showSceneList(){
+  syncActiveScene();          // 编辑与退出自动保存
+  if(activeSceneId!==selectedSceneId){
+    // 正在编辑的不是选中场景：退出后不再显示它
+    clearSceneItems(); activeSceneId=selectedSceneId;
+    if(selectedSceneId!=null) applySceneToMap(scenes.find(s=>s.id===selectedSceneId), false);
+  }
+  persistScenes();
+  $('sceneListView').classList.add('on');
+  $('sceneEditView').classList.remove('on');
+  renderSceneSelect();
+}
+function enterScene(id){
+  if(id!==activeSceneId){ syncActiveScene(); activeSceneId=id; applySceneToMap(scenes.find(s=>s.id===id),true); persistScenes(); }
+  const sc=scenes.find(s=>s.id===activeSceneId);
+  $('sceneEditName').textContent = sc ? sc.name : '场景';
+  $('sceneListView').classList.remove('on');
+  $('sceneEditView').classList.add('on');
+}
+// 把场景对象的静障碍/动目标绘制到地图（清掉旧场景项；共用静障碍不动）
+function applySceneToMap(sc, focus){
+  clearSceneItems();
+  if(!sc) return;
+  (sc.obstacles||[]).forEach(o=>{
+    obsId=Math.max(obsId,o.id||0);
+    const coords=o.coordinates||o.coords;
+    const overlays=buildObsOverlays(o.type,coords,o.remark,OBS_COLOR);
+    const obj={id:o.id||++obsId,type:o.type,coords,remark:o.remark||'',origin:'scene',overlays};
+    obstacles.push(obj); attachObsInfo(obj);
+  });
+  (sc.targets||[]).forEach(t=>{
+    const num=parseInt(String(t.id).replace(/\D/g,''))||0; tgtId=Math.max(tgtId,num);
+    const obj={id:t.id,mmsi:(t.mmsi==null?-1:t.mmsi),shiptype:(t.shiptype==null?0:t.shiptype),
+      position:t.position,speed:t.speed,course:t.course,yaw:t.yaw,shape:t.shape,
+      motion:t.motion||{mode:'straight'},origin:'scene',remark:t.remark||''};
+    drawTgt(obj); targets.push(obj);
+  });
+  if(sc.runConfig) applyRunConfig(sc.runConfig);
+  renderObsList(); renderTgtList(); onObstaclesChanged();
+}
+function requireActiveScene(){
+  if(activeSceneId==null || !scenes.length){ alert('请先在「场景」里新建或进入一个场景。'); return false; }
+  return true;
+}
+// 新建场景：自动命名并直接进入编辑（编辑与退出自动保存；可在列表用「重命名」改名）
+function addScene(){
+  syncActiveScene();
+  const s={id:++sceneSeq,name:'场景'+(sceneSeq),obstacles:[],targets:[],runConfig:currentRunConfig()};
+  scenes.push(s); activeSceneId=s.id;
+  applySceneToMap(s,true); persistScenes();
+  enterScene(s.id);
+}
+function renameSceneById(id){
+  const sc=scenes.find(s=>s.id===id); if(!sc) return;
+  const name=prompt('重命名场景：', sc.name); if(name==null||!name.trim()) return;
+  sc.name=name.trim(); persistScenes();
+  renderSceneSelect();
+  if(id===activeSceneId && $('sceneEditName')) $('sceneEditName').textContent=sc.name;
+}
+function deleteSceneById(id){
+  const sc=scenes.find(s=>s.id===id); if(!sc) return;
+  if(!confirm('删除场景「'+sc.name+'」？')) return;
+  if(id===activeSceneId){ clearSceneItems(); activeSceneId=null; }   // 若正加载/编辑则从地图移除
+  if(id===selectedSceneId){ selectedSceneId=null; }                  // 若被选中则取消选中
+  scenes.splice(scenes.indexOf(sc),1);
+  persistScenes(); renderSceneSelect();
+}
+// 导出当前激活场景为 JSON（含下发格式，排除实时动目标）
+$('exportBtn').addEventListener('click',()=>{
+  syncActiveScene();
+  const sc=scenes.find(s=>s.id===activeSceneId); if(!sc){ alert('无激活场景'); return; }
+  const data={
+    meta:{crs:'GCJ-02',kind:'scene',generated:new Date().toISOString(),name:sc.name},
+    scene:{name:sc.name,obstacles:sc.obstacles,targets:sc.targets,runConfig:sc.runConfig},
+    shipDownlink:{ shipNum: currentShipNum,
+      dynamic_target: targets.filter(t=>t.origin!=='realtime').map(t=>({type:PAYLOAD_TYPE.DYNAMIC_TARGET, data:targetToAis(t)})),
+      static_obstacle: {type:PAYLOAD_TYPE.STATIC_OBSTACLE, data:obstaclesToShipMsg()}   // 全部静障碍（共用+场景）
+    }
+  };
+  downloadJSON(data, 'usv-scene-'+sc.name+'.json');
+});
+$('importBtn').addEventListener('click',()=>$('fileInput').click());
+$('fileInput').addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f)return;
+  const r=new FileReader();
+  r.onload=()=>{ try{ importScene(JSON.parse(r.result)); }catch(err){ alert('解析失败：'+err.message); } };
+  r.readAsText(f); e.target.value='';
+});
+// 导入场景 → 作为一个新场景加入并激活
+function importScene(d){
+  const src=d.scene||d;   // 兼容直接给 {obstacles,targets,runConfig}
+  const nm=(src.name||d.meta&&d.meta.name||'导入场景');
+  syncActiveScene();
+  const s={id:++sceneSeq,name:nm,
+    obstacles:(src.obstacles||[]).map(o=>({id:o.id,type:o.type,coordinates:o.coordinates||o.coords,remark:o.remark||''})),
+    targets:(src.targets||[]).map(t=>({id:t.id,mmsi:t.mmsi,shiptype:t.shiptype,position:t.position,speed:t.speed,
+      course:t.course,yaw:t.yaw,shape:t.shape,motion:t.motion,remark:t.remark||''})),
+    runConfig:src.runConfig||currentRunConfig()};
+  scenes.push(s); activeSceneId=s.id;
+  applySceneToMap(s,true); persistScenes();
+  enterScene(s.id);   // 导入后直接进入该场景编辑
+}
+function downloadJSON(obj,filename){
+  const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();
+}
+
+/* ---------- 实时动目标门控（仅推演已开始且暂停时可加）---------- */
+function realtimeAllowed(){ return simStarted && !playing; }
+function updateRealtimeGate(){
+  const on=realtimeAllowed();
+  const ctl=$('rtControls'); if(ctl) ctl.classList.toggle('disabledpane', !on);
+  const hint=$('rtHint');
+  if(hint) hint.innerHTML = on
+    ? '运行期临时对象，可随时删除，默认不并入场景保存。<b>当前可添加</b>。'
+    : '运行期临时对象，可随时删除，默认不并入场景保存。仅在<b>推演暂停</b>时可添加'+(simStarted?'（当前正在推演，请先点⏸暂停）':'（请先点「推演」开始后再暂停）')+'。';
+}
+
+/* ---------- 小工具 ---------- */
+function mkBtn(txt,cls,fn){const b=document.createElement('button');b.textContent=txt;b.className=cls;b.onclick=fn;return b;}
+function focusCoords(coords){ map.setZoomAndCenter(coords.length===1?16:15, centroid(coords)); }
+function centroid(pts){let x=0,y=0;pts.forEach(p=>{x+=p[0];y+=p[1];});return[x/pts.length,y/pts.length];}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+/* ============================================================
+   船端 MQTT 接入
+   连接 ws://orca-tech.cn:8083/mqtt，订阅定位/Ship/任务/轨迹主题
+   ============================================================ */
+function setMqttStatus(state){
+  const bar=$('mqttBar'), txt=$('mqttStatusTxt');
+  bar.className='mqtt-bar '+state;
+  txt.textContent={
+    connecting:'连接中…', connected:'已连接 · 收数据中', nodata:'已连接 · 无数据',
+    reconnecting:'重连中…', closed:'已断开', offline:'离线', error:'连接错误'
+  }[state]||state;
+}
+/* 数据新鲜度：连上 broker 后，据「最近是否收到船端消息」区分 收数据中/无数据 */
+const DATA_FRESH_MS=3000;        // 最近 3s 内有消息 → 收数据中(绿)，否则 无数据(黄)
+let brokerConnected=false, lastMsgTime=0, freshTimer=null;
+/* 任务状态：轨迹消息持续到达=进行中；停发超过该间隔=已完成；从未有任务=无任务 */
+const TASK_TRAJ_TIMEOUT_MS=2500;
+let taskEverStarted=false, lastTrajTime=0;
+function updateTaskStatus(){
+  if(!taskEverStarted){ setV('ms_status','无任务'); return; }
+  const running=(Date.now()-lastTrajTime)<TASK_TRAJ_TIMEOUT_MS;
+  setV('ms_status', running?'进行中':'已完成', running?'okv':'');
+}
+function refreshDataStatus(){
+  updateTaskStatus();   // 顺带按轨迹新鲜度刷新任务状态
+  if(!brokerConnected) return;
+  const fresh=(Date.now()-lastMsgTime)<DATA_FRESH_MS;
+  setMqttStatus(fresh?'connected':'nodata');
+}
+
+/* 顶部：上报延迟 = 本地收到时刻 − 报文 header.stamp（显示于链路状态徽标旁）*/
+function updateReportDelay(stamp){
+  const el=$('mqttDelay'); if(!el) return;
+  const sec=stamp?+g(stamp,'sec',0):0, ns=stamp?+g(stamp,'nanosec',0):0;
+  if(!sec){ el.textContent=''; el.className='st-delay'; return; }
+  const delay=Date.now()-(sec*1000+ns/1e6);   // ms
+  const abs=Math.abs(delay);
+  el.textContent='延迟 '+(delay<0?'-':'')+(abs<1000?fmt(abs,0)+'ms':fmt(abs/1000,2)+'s');
+  el.className='st-delay '+(abs>5000?'badv':(abs>2000?'warnv':'okv'));
+}
+function clearDelay(){ const el=$('mqttDelay'); if(el){ el.textContent=''; el.className='st-delay'; } }
+
+/* 登录：选择本船编号 → 记录 currentShipNum → 连 MQTT 订阅该船主题 */
+function initLogin(){
+  const sel=$('loginShipSel');
+  sel.innerHTML = SHIP_NUMS.map(n=>`<option value="${n}">#${n}</option>`).join('');
+  $('loginBtn').addEventListener('click',()=>{
+    currentShipNum = +sel.value;
+    $('loginGate').classList.add('hide');
+    if($('mqttStatusSub')) $('mqttStatusSub').textContent = `本船 #${currentShipNum} · ${MQTT_CONFIG.url}`;
+    initMqtt();
+  });
+}
+function initMqtt(){
+  if(typeof mqtt==='undefined'){
+    setMqttStatus('error');
+    console.error('[MQTT] mqtt.js 未加载（CDN 不可达？）');
+    return;
+  }
+  setMqttStatus('connecting');
+  console.log('[MQTT] connecting to', MQTT_CONFIG.url, '· ship', currentShipNum);
+  mqttClient=mqtt.connect(MQTT_CONFIG.url, MQTT_CONFIG.options);
+
+  mqttClient.on('connect',()=>{
+    brokerConnected=true;
+    refreshDataStatus();               // 连上后按数据新鲜度显示 收数据中/无数据
+    if(!freshTimer) freshTimer=setInterval(refreshDataStatus,1000);
+    console.log('[MQTT] connected');
+    // 只订阅本船上报主题；同一主题内按 payload.type 区分消息种类
+    const topic=pubTopic(currentShipNum);
+    mqttClient.subscribe(topic,{qos:0},err=>{
+      if(err) console.warn('[MQTT] subscribe failed:',topic,err);
+      else console.log('[MQTT] subscribe topic:',topic);
+    });
+  });
+  mqttClient.on('reconnect',()=>{ brokerConnected=false; setMqttStatus('reconnecting'); clearDelay(); });
+  mqttClient.on('close',   ()=>{ brokerConnected=false; setMqttStatus('closed'); clearDelay(); });
+  mqttClient.on('offline', ()=>{ brokerConnected=false; setMqttStatus('offline'); clearDelay(); });
+  mqttClient.on('error',   e =>{ brokerConnected=false; setMqttStatus('error'); clearDelay(); console.warn('[MQTT]',e&&e.message||e); });
+  mqttClient.on('message', onMqttMessage);
+}
+function onMqttMessage(topic, buf){
+  // 校验船号：只处理本船主题（多船隔离）
+  if(parseShipNum(topic)!==currentShipNum) return;
+  let env;
+  try{ env=JSON.parse(buf.toString()); }
+  catch(e){ console.warn('[MQTT] bad JSON on',topic); return; }
+  // 信封结构：外层 type 标消息种类，data 子对象为消息本体（原 ROS 消息字段）
+  const d = (env && env.data) || {};
+  switch(env && env.type){
+    case PAYLOAD_TYPE.LOCALIZATION: handleLocalization(d); break;
+    case PAYLOAD_TYPE.MAIN_SHIP:    handleShip(d);         break;
+    case PAYLOAD_TYPE.MAIN_TASK:    handleTask(d);         break;
+    case PAYLOAD_TYPE.TRAJECTORY:   handleTrajectory(d);   break;
+    // 下发消息的回显：忽略（这是本网页自己发的动目标/静障碍）
+    case PAYLOAD_TYPE.DYNAMIC_TARGET:
+    case PAYLOAD_TYPE.STATIC_OBSTACLE: break;
+    default: /* 未知 type：忽略 */ break;
+  }
+}
+
+/* ---- 通用取值/格式化 ---- */
+const g=(o,path,dflt)=>{ // 安全取嵌套字段
+  try{ return path.split('.').reduce((v,k)=>v==null?undefined:v[k], o) ?? dflt; }
+  catch(e){ return dflt; }
+};
+const setV=(id,val,cls)=>{ const el=$(id); if(!el)return;
+  // 布尔值统一着色：true→绿, false→红（未显式指定 cls 时）
+  if(cls==null && typeof val==='boolean') cls = val ? 'okv' : 'badv';
+  el.textContent=(val==null||val==='')?'—':val;
+  el.className='v'+(cls?(' '+cls):''); };
+function stampStr(stamp){
+  if(!stamp) return '—';
+  const sec=+g(stamp,'sec',0), ns=+g(stamp,'nanosec',0);
+  if(!sec) return '—';
+  const d=new Date(sec*1000+Math.round(ns/1e6));
+  return isNaN(d)?'—':d.toISOString();
+}
+
+/* ============================================================
+   定位 loca/odometry —— 自船位置(lla)/朝向(eul.yaw) + 面板
+   接口框架：解析全字段，即便为 0/空也走完整渲染
+   ============================================================ */
+function handleLocalization(d){
+  lastLoca=d;
+  const lla=g(d,'lla',{}), eul=g(d,'eul',{}), vel=g(d,'vel',{}),
+        acc=g(d,'acc',{}), gyr=g(d,'gyr',{});
+  const lng=+g(lla,'lng',NaN), lat=+g(lla,'lat',NaN), yaw=+g(eul,'yaw',0);
+
+  // 面板刷新
+  setV('lo_lng', fmt(lng,6)); setV('lo_lat', fmt(lat,6)); setV('lo_alt', fmt(g(lla,'alt',0),2));
+  setV('lo_roll',fmt(g(eul,'roll',0),2)); setV('lo_pitch',fmt(g(eul,'pitch',0),2)); setV('lo_yaw',fmt(yaw,2));
+  setV('lo_vel',`${fmt(g(vel,'x',0),2)}, ${fmt(g(vel,'y',0),2)}, ${fmt(g(vel,'z',0),2)}`);
+  setV('lo_acc',`${fmt(g(acc,'x',0),2)}, ${fmt(g(acc,'y',0),2)}, ${fmt(g(acc,'z',0),2)}`);
+  setV('lo_gyr',`${fmt(g(gyr,'x',0),3)}, ${fmt(g(gyr,'y',0),3)}, ${fmt(g(gyr,'z',0),3)}`);
+  // 上报延迟（据本帧 stamp）显示于顶部链路徽标旁
+  updateReportDelay(g(d,'header.stamp',null));
+
+  // 地图渲染自船（位置有效才画）
+  if(!isNaN(lng)&&!isNaN(lat)){
+    const [mlng,mlat]=toMapCoord(lng,lat);
+    if(!ship){ ship={len:SHIP_LEN,beam:SHIP_BEAM}; }
+    ship.pos=[mlng,mlat];
+    ship.heading=norm360(yaw);
+    ship.att={roll:+g(eul,'roll',0),pitch:+g(eul,'pitch',0),yaw:yaw};
+    ship.omega={x:+g(gyr,'x',0),y:+g(gyr,'y',0),z:+g(gyr,'z',0)};
+    ship.time=stampStr(g(d,'header.stamp',null));
+    ship.raw=d;
+    redrawShip();
+    pushHistTrack(mlng,mlat);   // 累积并绘制历史轨迹
+    refreshTgtDistances();   // 本船移动后刷新动目标标签中的「距本船」
+    const wait=$('shipWaitHint'); if(wait) wait.style.display='none';
+    // 时钟同步为船端 stamp
+    if(!playing && ship.time!=='—'){
+      $('clkTs').textContent=ship.time;
+      $('clkTime').textContent=ship.time.substr(11,8);
+    }
+  }
+  bumpRx();
+}
+
+/* ============================================================
+   Ship main/ship —— 状态面板（接口框架，全字段留好）
+   ============================================================ */
+/* ============================================================
+   Ship main/ship —— 接口框架（状态面板已移除，暂只保留原始帧+计数）
+   如需展示 Ship 字段，可在此解析 linux_state/thrust/pd_percent/linux_err 等
+   ============================================================ */
+function handleShip(d){
+  lastShip=d;   // 保留最近一帧 Ship 状态，供后续使用
+  bumpRx();
+}
+
+/* ============================================================
+   任务 main/task —— 任务类型 / 任务状态 / 任务进度（面板）
+   航路点仍绘制到地图（航行/离泊：lng[]/lat[] 序列；泊船无航路点）
+   任务类型枚举（planning 定义）：1=自主行船 / 2=自主泊船 / 4=自主离泊
+   ============================================================ */
+const MISSION={NAVIGATION:1, DOCKING:2, UNDOCKING:4};
+const MISSION_NAME={[MISSION.NAVIGATION]:'自主航行', [MISSION.DOCKING]:'自主靠泊', [MISSION.UNDOCKING]:'自主离泊'};
+function handleTask(d){
+  const type=g(d,'type',null);
+  const t=type==null?null:+type;
+  // 任务类型
+  setV('ms_type', type==null?'—':(MISSION_NAME[t]||('type='+type)));
+
+  // 航路点：航行/离泊绘制到地图；泊船无航路点，清除
+  const lngs=g(d,'lng',[])||[], lats=g(d,'lat',[])||[];
+  if(t!==MISSION.DOCKING && lngs.length){
+    const pts=lngs.map((lng,i)=>toMapCoord(+lng, +(lats[i]!=null?lats[i]:0)));
+    drawRoute(pts);
+  }else{
+    clearRoute();
+  }
+
+  // 任务状态：由轨迹消息新鲜度推断（无任务/进行中/已完成）
+  // 收到新任务即视为进行中，给宽限期等待轨迹接管（刷新 lastTrajTime）
+  taskEverStarted=true; lastTrajTime=Date.now(); updateTaskStatus();
+  // 任务进度（接口框架占位：progress 字段）
+  const prog=g(d,'progress',null);
+  setV('ms_progress', prog==null?'—':(fmt(prog,0)+'%'));
+
+  bumpRx();
+}
+
+/* ============================================================
+   轨迹 planning/trajectory —— 接口框架（面板已并入任务，暂只计数）
+   如需展示轨迹，可在此解析 path.data / direction / header.stamp
+   ============================================================ */
+/* ============================================================
+   轨迹 planning/trajectory —— 局部轨迹（规划路径，虚线）+ 面板航向来源
+   path.data 假定为扁平 [lng,lat,lng,lat,...]（GCJ-02，经坐标钩子）
+   若船端为局部平面坐标(相对本船的米)，需在此加转换后再画
+   ============================================================ */
+function handleTrajectory(d){
+  lastTraj=d;   // 保留最近一帧轨迹
+  lastTrajTime=Date.now(); taskEverStarted=true; updateTaskStatus();   // 收到轨迹→任务进行中
+  // 局部轨迹：解析 path.data 扁平数组为点对并绘制（虚线）
+  const flat=g(d,'path.data',[])||[];
+  if(Array.isArray(flat) && flat.length>=4){
+    const pts=[];
+    for(let i=0;i+1<flat.length;i+=2){ pts.push(toMapCoord(+flat[i], +flat[i+1])); }
+    drawLocalTrack(pts);
+  }else{
+    drawLocalTrack(null);
+  }
+  // 预留：轨迹航向 → 面板「航向」。船端字段确定后启用，例如：
+  // const hd=g(d,'heading.data',[]); if(hd&&hd.length) setV('hd_course', fmt(hd[0],1)+'°');
+  bumpRx();
+}
+
+/* 接收计数徽标 + 数据新鲜度打点 */
+let rxCount=0;
+function bumpRx(){
+  rxCount++; $('shipRxBadge').textContent='RX '+rxCount;
+  lastMsgTime=Date.now();
+  refreshDataStatus();   // 收到消息立即转「收数据中」(绿)
+}
+
+/* ---------- 右侧栏 图标竖条：点开展开对应功能，再点收起（默认全部收起）---------- */
+const SIDE_TAB_TITLE={edit:'场景编辑',run:'场景运行',replay:'场景复现',record:'录制回放'};
+function openSidePane(name){
+  document.querySelectorAll('#sideRail .tab').forEach(t=>t.classList.toggle('on',t.dataset.tab===name));
+  document.querySelectorAll('.tabpane').forEach(p=>p.classList.toggle('on',p.dataset.pane===name));
+  const ttl=$('sideContentTitle'); if(ttl) ttl.textContent=SIDE_TAB_TITLE[name]||'';
+  $('side').classList.remove('collapsed');
+  if(name==='run') updateRealtimeGate();   // 进「场景运行」刷新实时动目标门控
+}
+function collapseSide(){
+  $('side').classList.add('collapsed');
+  document.querySelectorAll('#sideRail .tab').forEach(t=>t.classList.remove('on'));
+}
+document.querySelectorAll('#sideRail .tab').forEach(tab=>{
+  tab.addEventListener('click',()=>{
+    const name=tab.dataset.tab;
+    // 点击已激活且已展开的图标 → 收起；否则展开该功能
+    if(tab.classList.contains('on') && !$('side').classList.contains('collapsed')){ collapseSide(); return; }
+    openSidePane(name);
+  });
+});
+$('sideCollapseBtn').addEventListener('click',collapseSide);
+
+/* ---------- 场景编辑 子选项切换（共用静障碍 / 场景 / 实时动目标）---------- */
+document.querySelectorAll('#editSubTabs .stab').forEach(stab=>{
+  stab.addEventListener('click',()=>{
+    if(draw||rectOrient) return;   // 绘制中不切换，避免状态错乱
+    const name=stab.dataset.sub;
+    document.querySelectorAll('#editSubTabs .stab').forEach(x=>x.classList.toggle('on',x===stab));
+    document.querySelectorAll('.subpane').forEach(p=>p.classList.toggle('on',p.dataset.subpane===name));
+    if(name==='scene') showSceneList();       // 进「场景」子选项默认回到场景列表
+  });
+});
+
+/* ---------- ② 场景：返回列表 / 清空（编辑与退出自动保存，无保存按钮）---------- */
+$('sceneBackBtn').addEventListener('click',showSceneList);
+$('clearSceneBtn').addEventListener('click',()=>{
+  if(!requireActiveScene()) return;
+  if(!confirm('清空当前场景的静障碍与动目标？')) return;
+  clearSceneItems(); syncActiveScene(); onObstaclesChanged();
+});
+
+/* 初始化：先载共用静障碍，再载场景集合（激活场景绘到地图）*/
+loadShared();
+loadScenesFromStore();
+updateRealtimeGate();
+
+/* ---------- 场景运行：结束 / 倍速 ---------- */
+let simSpeed=1;   // 倍速（预留，暂固定 1×）
+/* 结束：完全结束当前推演 —— 停止推演、删除所有实时动目标、复位场景动目标位置（重载激活场景快照）*/
+function endSim(){
+  if(!simStarted && !playing && !targets.some(t=>t.origin==='realtime')){ return; }   // 无可结束内容
+  if(!confirm('结束当前推演？将复位场景动目标位置并删除全部实时动目标。')) return;
+  // 停止推演
+  if(playing){ playing=false; clearInterval(timer); }
+  // 删除所有实时动目标（含其覆盖物/路线）
+  for(let i=targets.length-1;i>=0;i--){
+    if(targets[i].origin==='realtime'){
+      const t=targets[i]; [t.overlay,t.arrow,t.label].forEach(v=>v&&map.remove(v)); clearTgtRoute(t);
+      targets.splice(i,1);
+    }
+  }
+  // 复位场景动目标位置/航向/航段到本次推演开始时的基线
+  if(runBaseline){
+    targets.filter(t=>t.origin==='scene').forEach(t=>{
+      const b=runBaseline[t.id]; if(!b) return;
+      t.position=b.position.slice(); t.course=b.course; t.yaw=b.yaw;
+      t.motion=b.motion?JSON.parse(JSON.stringify(b.motion)):{mode:'straight'};
+      drawTgt(t); if(t.motion&&t.motion.mode==='route') drawTgtRoute(t);
+    });
+  }
+  runBaseline=null;
+  renderTgtList();
+  simStarted=false; updatePlayBtnLabel(); updateRealtimeGate();   // 结束后按钮回到「开始」
+  console.log('[Sim] 已结束推演：复位场景动目标、删除实时动目标');
+}
+const _endBtn=$('endBtn');
+if(_endBtn) _endBtn.addEventListener('click',endSim);
+// 倍速切换（预留接口，按钮当前 disabled）
+const _speedSeg=$('speedSeg');
+if(_speedSeg) _speedSeg.addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b||b.disabled) return;
+  simSpeed=parseFloat(b.dataset.x)||1;
+  _speedSeg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  // TODO: 应用倍速到推演步进/下发（接口预留）
+  console.log('[Sim] 倍速 =', simSpeed, '（接口预留）');
+});
+
+/* ---------- 设置浮层（右上角齿轮：显示设置 / 运行配置 / 登录选项）---------- */
+function openSettings(){
+  // 打开时同步各输入为当前生效值
+  $('tgtRateInput').value = +(1000/SIM_STEP_MS).toFixed(2);
+  $('obsRateInput').value = +(1000/STATIC_OBSTACLE_REPUB_MS).toFixed(3);
+  $('ringRadii').value = RANGE_RINGS.radii.join(',');
+  $('currentShipLabel').textContent = '当前本船 #'+(currentShipNum==null?'—':currentShipNum);
+  $('settingsModal').classList.remove('hide');
+}
+function closeSettings(){ $('settingsModal').classList.add('hide'); }
+$('settingsBtn').addEventListener('click',openSettings);
+$('settingsCloseBtn').addEventListener('click',closeSettings);
+$('settingsModal').addEventListener('click',e=>{ if(e.target===$('settingsModal')) closeSettings(); });
+
+/* 动目标下发频率：Hz → SIM_STEP_MS（推演中即时重启定时器生效）*/
+$('applyTgtRateBtn').addEventListener('click',()=>{
+  const hz=parseFloat($('tgtRateInput').value);
+  if(isNaN(hz)||hz<=0){ alert('请输入有效的动目标下发频率(Hz)，如 10'); return; }
+  SIM_STEP_MS=Math.max(10, Math.round(1000/hz));
+  $('tgtRateInput').value=+(1000/SIM_STEP_MS).toFixed(2);
+  if(playing){ clearInterval(timer); timer=setInterval(step,SIM_STEP_MS); }   // 即时生效
+});
+/* 静障碍下发频率：Hz → 兜底重发间隔 ms */
+$('applyObsRateBtn').addEventListener('click',()=>{
+  const hz=parseFloat($('obsRateInput').value);
+  if(isNaN(hz)||hz<=0){ alert('请输入有效的静障碍下发频率(Hz)，如 0.1'); return; }
+  STATIC_OBSTACLE_REPUB_MS=Math.max(100, Math.round(1000/hz));
+  $('obsRateInput').value=+(1000/STATIC_OBSTACLE_REPUB_MS).toFixed(3);
+});
+/* 退出登录：断开 MQTT、重置状态，回到登录浮层（支持重新登录到不同船只）*/
+$('logoutBtn').addEventListener('click',()=>{
+  if(!confirm('退出登录并断开当前船只连接？可重新登录到不同船只。')) return;
+  logout();
+});
+function logout(){
+  closeSettings();
+  // 停止推演
+  if(playing){ playing=false; clearInterval(timer); }
+  // 断开 MQTT
+  if(mqttClient){ try{ mqttClient.end(true); }catch(e){} mqttClient=null; }
+  if(freshTimer){ clearInterval(freshTimer); freshTimer=null; }
+  brokerConnected=false; lastMsgTime=0;
+  setMqttStatus('offline'); clearDelay();
+  // 清空地图上全部对象与本船，然后按内存重绘共用静障碍 + 激活场景（保持一致）
+  clearAll();
+  loadShared();
+  applySceneToMap(scenes.find(s=>s.id===activeSceneId), false);
+  simStarted=false; updatePlayBtnLabel(); updateRealtimeGate();
+  // 重置任务状态
+  taskEverStarted=false; lastTraj=null; lastTrajTime=0; updateTaskStatus();
+  setV('ms_type','—'); setV('ms_progress','—');
+  $('shipRxBadge').textContent='—'; rxCount=0;
+  // 回到登录浮层，重新选择船只
+  currentShipNum=null;
+  const sel=$('loginShipSel'); if(sel) sel.value=SHIP_NUMS[0];
+  $('loginGate').classList.remove('hide');
+}
+
+renderObsList(); renderTgtList();
+updateTaskStatus();   // 初始：无任务
+initLogin();          // 显示登录浮层，登录后才连 MQTT
+console.log('USV sim testbed ready.');
+}
+</script>
+</body>
+</html>
