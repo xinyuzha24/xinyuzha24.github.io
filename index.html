@@ -673,10 +673,10 @@ const AMAP_CONFIG = {
 
 /* ============================================================
    2) 船端 MQTT 配置：自船状态由船端实时下发
-   连接地址 ws://orca-tech.cn:8083/mqtt
+   连接地址 wss://orca-tech.cn:8083/mqtt
    ============================================================ */
 const MQTT_CONFIG = {
-  url: "ws://orca-tech.cn:8083/mqtt",
+  url: "wss://orca-tech.cn:8083/mqtt",
   options: {
     reconnectPeriod: 3000,   // 断线自动重连间隔(ms)
     connectTimeout: 8000,    // 连接超时(ms)
@@ -2445,7 +2445,7 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','
 
 /* ============================================================
    船端 MQTT 接入
-   连接 ws://orca-tech.cn:8083/mqtt，订阅定位/Ship/任务/轨迹主题
+   连接 wss://orca-tech.cn:8083/mqtt，订阅定位/Ship/任务/轨迹主题
    ============================================================ */
 /* 链路层状态（与 broker 的连接）：connecting/connected/reconnecting/closed/offline/error */
 function setLinkStatus(state){
